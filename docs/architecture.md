@@ -114,11 +114,22 @@ NIR is a typed Pydantic model:
 class ExtractionResult:
     document_id: UUID
     fragments: list[Fragment]       # ordered, addressable units
+    blocks: list[Block]             # hierarchical document structure (optional, populated for document-like sources)
     tables: list[StructuredTable]
     metadata: dict[str, Any]        # EXIF, codec info, page count, etc.
     warnings: list[str]
     source_handler: str
     handler_version: str
+
+class Block:
+    block_id: UUID
+    parent_id: UUID | None          # tree structure
+    kind: Literal['heading','paragraph','list','table','figure','caption','formula','code']
+    level: int | None               # heading depth, list depth
+    reading_order: int              # globally ordered traversal index
+    page: int | None
+    bbox: tuple[float, float, float, float] | None
+    text: str | None
 
 class Fragment:
     fragment_id: UUID
@@ -127,7 +138,13 @@ class Fragment:
     position: PositionRef           # page+bbox, time range, row index, etc.
     confidence: float | None
     language: str | None
+    # Structure lineage (populated when source has hierarchy):
+    source_block_ids: list[UUID]    # blocks this fragment was derived from
+    heading_path: list[str]         # ['Chapter 2','2.3 Methods'] for retrieval context
+    table_lineage: dict | None      # { table_id, row_idx, col_headers } for table-derived fragments
 ```
+
+Document-like sources (PDF/DOCX/PPTX/HTML) populate the optional `blocks` tree to preserve layout, reading order, and parent-child relationships. Fragments carry block lineage so chunkers and rerankers can exploit structure without re-parsing. Sources with no inherent hierarchy (CSV row, JSON leaf, audio transcript span) leave `blocks=[]` and use only the flat fragment list. The hierarchical extension is a planned pilot for Docling-backed extraction (see §10 Phase 1+); v1 handlers may emit a degenerate single-level block tree.
 
 **Handlers** (see registry §3):
 - **PDF**: PyMuPDF for layout-aware text + per-page raster fallback to OCR (Tesseract or PaddleOCR) when text density < threshold. Tables via `pdfplumber` or Camelot.
@@ -149,7 +166,7 @@ Extraction is **idempotent**: re-running on the same blob produces equivalent NI
 
 Enrichment is a fan-out stage with parallel sub-tasks per fragment / per document:
 
-- **Chunking**: hierarchical — section-aware splitter (markdown headers, PDF sections, transcript speaker turns) then token-aware sliding window (default 512 tokens, 64 overlap). `semchunk` for token-accurate splits with `tiktoken`.
+- **Chunking**: structure-first, then token-aware. The chunker traverses the NIR `blocks` tree (when present) and produces chunks aligned to semantic units — headings keep their section, tables are chunked as whole rows or row-groups with repeated headers, captions stay attached to figures, transcript chunks respect speaker turns. Token-aware overflow logic (default 512 tokens, 64 overlap, `semchunk` + `tiktoken`) only applies after structure-preserving boundaries are chosen, never across them. Chunk metadata is **mandatory** and persisted: `heading_path`, `page`, `bbox`, `source_block_ids`, `table_lineage`, `confidence`. Sources without a block tree fall back to the section-aware splitter on flat fragments.
 - **Embedding**: configurable model (default `text-embedding-3-small`, 1536-dim, via OpenAI; local fallback `bge-small-en-v1.5` 384-dim via `sentence-transformers` on GPU worker). Batched (64 chunks/call). Cached by `sha256(text + model_id)` to avoid re-embedding.
 - **Summary**: per-document and per-section, via Claude/GPT-4o-mini. Structured output (Pydantic schema) with title, abstract, key_points, topics.
 - **NER**: spaCy (`en_core_web_trf`) for offline baseline + LLM-assisted extraction for domain entities driven by tenant-supplied schema.
@@ -254,6 +271,8 @@ This is the single most important scalability lever — heavy jobs cannot starve
 
 **Decision: ARQ now, abstract the interface cleanly so we can swap to Temporal at multi-region scale.**
 
+Migration seam principle: handlers and stages must not import ARQ symbols. They receive an injected `WorkflowContext` that exposes only generic primitives — `enqueue(stage, payload)`, `sleep(duration)`, `complete()`, `fail(reason)`. Document stage transitions are persisted to `core.jobs` and the outbox as durable workflow state, not just Redis queue events. This means a Temporal port replaces the `WorkflowContext` adapter and the ARQ runner; handler code is untouched. Triggers for the migration are listed in §9 row 11.
+
 ### Queue Topology
 
 ```
@@ -341,6 +360,9 @@ CREATE TABLE core.chunks (
     content_tsv     TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
     token_count     INT NOT NULL,
     position        JSONB NOT NULL,
+    heading_path    TEXT[],                              -- e.g. ['Chapter 2','2.3 Methods']
+    source_block_ids UUID[],                             -- lineage back to NIR blocks
+    table_lineage   JSONB,                               -- { table_id, row_idx } when chunk derives from a table
     embedding       vector(1536),
     embedding_model TEXT,
     language        TEXT,
@@ -518,9 +540,11 @@ POST /v1/jobs/dlq/{job_id}/retry
 | LLM (local) | vLLM + Llama-3.1-8B | Self-hosted tenants |
 | ASR | `faster-whisper` (large-v3 GPU / distil CPU) | 4-6x faster than reference Whisper |
 | OCR | PaddleOCR primary, Tesseract fallback | Paddle more accurate on mixed-language/tabular |
-| PDF | PyMuPDF + pdfplumber | Note: PyMuPDF is AGPL — see §9 |
+| OCR (hard-page fallback, deferred) | PaddleOCR-VL | GPU vision-language fallback for low-density / mixed-language / formula-or-chart-heavy pages. Not in v1; trigger when classical OCR confidence < threshold on benchmark gold set. |
+| PDF (v1 default) | PyMuPDF + pdfplumber | Note: PyMuPDF is AGPL — see §9 |
+| PDF/Office (Phase 1+ pilot) | Docling (MIT) | Hierarchical layout, reading order, tables, formulas — emits NIR `blocks` tree natively. Pilot before locking as default. |
 | NER | spaCy `en_core_web_trf` + LLM-assisted | Hybrid keeps cost low |
-| Chunking | `semchunk` + section-aware splitter | Token-accurate, structure-preserving |
+| Chunking | structure-first traversal of NIR blocks + `semchunk` token overflow | Structure boundaries take precedence over token windows; metadata mandatory |
 | Reranker | `bge-reranker-base` via Infinity | Cheap quality boost |
 | Cache | Redis (separate logical DB) | Embeddings cache, dedup, rate limit |
 | Observability | OTel + Tempo + Prometheus + Grafana + Loki + Sentry | OTel is the lingua franca |
@@ -592,6 +616,11 @@ Bottlenecks in order of arrival:
 | 10 | **Auth source of truth**: build internal vs Keycloak / Clerk? | Keycloak (self-hosted on-prem), Clerk (cloud-only) |
 | 11 | **ARQ → Temporal migration trigger**: when? | When DLQ/retry observability becomes painful, or workflow durability > 24h needed |
 | 12 | **Cost caps**: per-tenant budget for LLM/embedding calls? | Instrument cost metrics in v1; enforce caps in v1.1 |
+| 13 | **Docling adoption**: pilot in Phase 1 — what fraction of the PDF/DOCX/PPTX/HTML test corpus does Docling parse strictly better than PyMuPDF + python-docx + selectolax? | Decide after Phase 1 eval; if win is < 10% on gold set, keep current parsers as default and ship Docling as an opt-in handler |
+| 14 | **Visual retrieval trigger**: when does the eval gap on layout-heavy docs justify a ColPali lane and the Qdrant introduction it forces? | Quantitative trigger: recall@10 gap > 15% on a ViDoRe-style internal subset, OR a paying customer with slide-deck/scanned-form workload |
+| 15 | **Embedding default after bakeoff**: if BGE-M3 wins on multilingual/long-context but pgvector single-vector mode wastes its sparse + multivector outputs, do we change the default or wait for Qdrant? | Keep best dense-mode model in pgvector for v1; defer sparse/multivector exploitation to the same trigger as Q14 |
+| 16 | **Eval gold-set ownership**: who curates and labels the 20-50 fixture documents, and what's the refresh cadence as handlers evolve? | Engineering owns it in v1, versioned in repo under `eval/fixtures/`; refresh on every handler version bump |
+| 17 | **RAPTOR / GraphRAG**: workload-driven, not roadmap-driven. Watch for: very-long-document synthesis queries (RAPTOR), cross-document entity questions (GraphRAG). | Not in any phase. Reopen if user query analytics show > 20% multi-hop / cross-doc questions |
 
 ---
 
@@ -599,10 +628,13 @@ Bottlenecks in order of arrival:
 
 | Phase | Scope | Duration |
 |-------|-------|----------|
-| **0 — Skeleton** | Repo scaffold (uv, ruff, pyright, pytest), Docker Compose, FastAPI, Postgres + Alembic, Redis, MinIO, ARQ no-op worker, CI green | 1 week |
-| **1 — Text formats** | PDF, DOCX, TXT, MD, HTML, JSON, CSV handlers; chunking; embeddings (OpenAI); pgvector; hybrid search; polling endpoint | 2 weeks |
-| **2 — Heavy formats** | GPU worker + `faster-whisper`, video pipeline (ffmpeg), image OCR (PaddleOCR), backpressure, idempotency, DLQ, SSE progress | 2 weeks |
-| **3 — Enrichment** | LLM summarization, NER, language detection, routing policy engine + jsonlogic | 1 week |
+| **0 — Skeleton + Eval** | Repo scaffold (uv, ruff, pyright, pytest), Docker Compose, FastAPI, Postgres + Alembic, Redis, MinIO, ARQ no-op worker, CI green. **Eval harness skeleton with 20-50 representative file fixtures** (versioned under `eval/fixtures/`). Metrics surface: extraction accuracy, chunk faithfulness, retrieval recall@k, nDCG, latency, $/doc. | 1.5 weeks |
+| **1 — Text formats + structured NIR** | PDF, DOCX, TXT, MD, HTML, JSON, CSV handlers emitting hierarchical NIR (`blocks` tree); structure-aware chunker; embeddings (OpenAI default); pgvector; hybrid search; polling endpoint. **Docling pilot** behind a feature flag for PDF/DOCX. | 2.5 weeks |
+| **2 — Heavy formats + embedding bakeoff** | GPU worker + `faster-whisper`, video pipeline (ffmpeg), image OCR (PaddleOCR), backpressure, idempotency, DLQ, SSE progress. **Embedding bakeoff** (`text-embedding-3-small` vs BGE-M3 vs jina-v3) on the eval gold set; lock the v1 default based on results. | 2.5 weeks |
+| **3 — Enrichment** | LLM summarization, NER, language detection, routing policy engine + jsonlogic. RAGChecker / ARES wired into eval harness. | 1 week |
 | **4 — Multi-tenant + auth** | Tenants, API keys, JWT, rate limit, RLS policies, per-tenant config | 1 week |
-| **5 — Observability + eval** | OTel, Prometheus, Grafana, Loki, eval harness with golden set | 1 week |
+| **5 — Observability** | OTel, Prometheus, Grafana, Loki (eval harness already running since Phase 0) | 1 week |
 | **6 — Hardening** | Chaos tests on workers, DB partition rollout, cost dashboards, compliance groundwork | Ongoing |
+| **Deferred — Visual retrieval** | ColPali / page-image multivector retrieval lane for layout-heavy docs. Triggers Qdrant introduction as a second retrieval lane. Not in initial release. | When recall@10 gap > 15% on a ViDoRe-style internal subset vs text retrieval, or a customer requirement for slide-deck/scanned-form workload appears |
+| **Deferred — Hard-page OCR** | PaddleOCR-VL on GPU worker as fallback for low-confidence classical OCR | After eval shows classical OCR ceiling on multilingual / chart-heavy pages |
+| **Deferred — Hierarchical / graph retrieval** | RAPTOR pilot for very long documents; GraphRAG only if downstream product needs cross-document entity reasoning | Workload-driven, not roadmap-driven — reopen if query analytics show > 20% multi-hop / cross-doc questions |
