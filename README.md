@@ -1,4 +1,4 @@
-# omnidoc-ingest
+# Omnivore
 
 A universal document ingestion pipeline that accepts any file format, extracts structured intelligence (metadata, summaries, sentiment, entities, embeddings), and routes output to a relational database or a RAG (Retrieval-Augmented Generation) vector store based on downstream use.
 

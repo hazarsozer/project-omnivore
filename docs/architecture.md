@@ -1,4 +1,4 @@
-# omnidoc-ingest — Architecture
+# Omnivore — Architecture
 
 A universal document ingestion pipeline that accepts heterogeneous file inputs, extracts structured intelligence via format-specific handlers, enriches via LLM, and routes outputs to a relational store, a vector store, or both.
 
@@ -101,7 +101,7 @@ The pipeline is a **stage graph**, not a linear chain. Each stage is a pure func
   - Virus scan hook (ClamAV sidecar, optional, per-tenant policy).
   - Hash on the fly (SHA-256, streaming) for dedup.
 - **Dedup**: if hash matches existing document for tenant, return the prior `document_id` with `status=duplicate`. Saves compute on re-uploads.
-- **Persistence**: blob → `s3://omnidoc-raw/{tenant_id}/{yyyy}/{mm}/{document_id}.{ext}`. Row inserted in `documents` with `status='queued'`.
+- **Persistence**: blob → `s3://omnivore-raw/{tenant_id}/{yyyy}/{mm}/{document_id}.{ext}`. Row inserted in `documents` with `status='queued'`.
 - **Enqueue**: emit `ingest.dispatch` job with `{document_id, mime, size, tenant_id, config_snapshot}`. Return 202 with polling URL.
 
 ### 2.2 Extraction
@@ -215,9 +215,9 @@ class FormatHandler(Protocol):
 Handlers self-register via Python entry points (`pyproject.toml`):
 
 ```toml
-[project.entry-points."omnidoc.handlers"]
-pdf = "omnidoc_handlers.pdf:PdfHandler"
-audio_whisper = "omnidoc_handlers.audio:WhisperHandler"
+[project.entry-points."omnivore.handlers"]
+pdf = "omnivore_handlers.pdf:PdfHandler"
+audio_whisper = "omnivore_handlers.audio:WhisperHandler"
 ```
 
 At process start, the registry walks entry points, instantiates handlers, and indexes them by `(mime_pattern, magic_signature)`. Third-party packages drop a wheel into the image and become available — zero core changes.
