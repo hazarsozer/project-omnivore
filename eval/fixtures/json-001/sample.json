@@ -1,0 +1,7 @@
+[
+  {"id": 1, "product": "Widget A", "category": "Electronics", "price": 29.99, "in_stock": true},
+  {"id": 2, "product": "Gadget B", "category": "Electronics", "price": 49.99, "in_stock": false},
+  {"id": 3, "product": "Thing C", "category": "Home", "price": 14.99, "in_stock": true},
+  {"id": 4, "product": "Doohickey D", "category": "Home", "price": 8.50, "in_stock": true},
+  {"id": 5, "product": "Thingamajig E", "category": "Outdoors", "price": 74.99, "in_stock": false}
+]

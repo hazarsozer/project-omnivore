@@ -1,0 +1,16 @@
+{
+  "fixture_id": "html-001",
+  "format": "html",
+  "description": "Webpage with nav/aside/footer noise and main content with two H2 sections",
+  "expected_handler": "html",
+  "expected_mime": "text/html",
+  "expected_fragment_count_min": 4,
+  "expected_fragment_count_max": 12,
+  "expected_chunk_count_min": 1,
+  "expected_chunk_count_max": 6,
+  "expected_table_count": 0,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": false,
+  "noise_excluded": ["Sidebar content", "Footer content", "Documentation"]
+}

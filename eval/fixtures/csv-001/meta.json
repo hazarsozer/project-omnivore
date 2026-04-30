@@ -1,0 +1,17 @@
+{
+  "fixture_id": "csv-001",
+  "format": "csv",
+  "description": "Employee data CSV with 10 rows and 4 columns",
+  "expected_handler": "csv",
+  "expected_mime": "text/csv",
+  "expected_fragment_count_min": 10,
+  "expected_fragment_count_max": 10,
+  "expected_chunk_count_min": 1,
+  "expected_chunk_count_max": 5,
+  "expected_table_count": 1,
+  "expected_table_headers": ["id", "name", "department", "salary"],
+  "expected_row_count": 10,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": true
+}

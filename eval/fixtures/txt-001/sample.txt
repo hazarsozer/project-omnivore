@@ -1,0 +1,16 @@
+Omnivore Project Overview
+
+Omnivore is a universal document ingestion pipeline that accepts files in many formats.
+It extracts structured intelligence from documents and stores results in PostgreSQL.
+
+Architecture
+
+The system is built on FastAPI for the REST API layer.
+ARQ handles asynchronous job processing through Redis queues.
+PostgreSQL with pgvector stores all extracted data and enables semantic search.
+
+Getting Started
+
+Install the package manager uv and synchronize dependencies.
+Configure your environment by copying .env.example to .env.
+Start the infrastructure using docker compose and run database migrations.

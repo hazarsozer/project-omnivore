@@ -1,0 +1,16 @@
+{
+  "fixture_id": "md-001",
+  "format": "markdown",
+  "description": "Markdown with H1/H2/H3 headings, paragraphs, and a code block",
+  "expected_handler": "markdown",
+  "expected_mime": "text/markdown",
+  "expected_fragment_count_min": 5,
+  "expected_fragment_count_max": 20,
+  "expected_chunk_count_min": 2,
+  "expected_chunk_count_max": 10,
+  "expected_table_count": 0,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": false,
+  "has_code_blocks": true
+}

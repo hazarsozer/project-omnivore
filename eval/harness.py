@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from eval.metrics import EvalResult, StubMetricsEvaluator
+from eval.metrics import EvalResult
+from eval.runner import run_fixture
+from omnivore.pipeline.registry import HandlerRegistry
 
 
 @dataclass
@@ -36,33 +38,66 @@ async def run_harness(config: HarnessConfig) -> list[EvalResult]:
     if config.fixture_ids:
         catalog = [f for f in catalog if f["fixture_id"] in config.fixture_ids]
 
-    evaluator = StubMetricsEvaluator()
+    registry = HandlerRegistry()
+    registry.discover()
+
     results: list[EvalResult] = []
 
     for fixture in catalog:
         fixture_id = fixture["fixture_id"]
         fixture_dir = Path(fixture["_fixture_dir"])
-        source_files = [p for p in fixture_dir.iterdir() if p.name not in ("meta.json",)]
+        source_files = [p for p in fixture_dir.iterdir() if p.name != "meta.json"]
 
         if not source_files:
-            print(f"SKIP {fixture_id}: source file missing — run eval/fixtures/download.sh first")
+            print(f"SKIP {fixture_id}: no source file — add it to {fixture_dir}/")
             continue
+
+        source_file = source_files[0]
+        print(f"RUN  {fixture_id}: {source_file.name}")
+
+        try:
+            run_output = await run_fixture(source_file, fixture, registry)
+        except Exception as exc:
+            print(f"ERR  {fixture_id}: {exc}")
+            results.append(
+                EvalResult(
+                    fixture_id=fixture_id,
+                    handler=fixture.get("expected_handler", "unknown"),
+                    handler_version="error",
+                    run_at=datetime.now(UTC),
+                    metrics={},
+                    errors=[str(exc)],
+                )
+            )
+            continue
+
+        accuracy = run_output.get("structural_accuracy", 0.0)
+        status = "PASS" if accuracy == 1.0 else f"FAIL({accuracy:.0%})"
+        print(f"     {status}  handler={run_output.get('handler_used')}  "
+              f"chunks={run_output.get('chunk_count')}  "
+              f"frags={run_output.get('fragment_count')}")
 
         result = EvalResult(
             fixture_id=fixture_id,
-            handler=fixture.get("expected_handler", "unknown"),
-            handler_version="stub",
-            run_at=datetime.now(timezone.utc),
+            handler=run_output.get("handler_used", "unknown"),
+            handler_version="1.0.0",
+            run_at=datetime.now(UTC),
             metrics={
-                "extraction_accuracy": None,  # Phase 3
-                "chunk_faithfulness": None,   # Phase 3
+                "structural_accuracy": accuracy,
+                "fragment_count": run_output.get("fragment_count"),
+                "chunk_count": run_output.get("chunk_count"),
+                "table_count": run_output.get("table_count"),
+                "handler_matched": run_output.get("handler_matched"),
+                "extraction_accuracy": None,   # Phase 3
+                "chunk_faithfulness": None,    # Phase 3
                 "retrieval_recall_at_10": None,  # Phase 3
-                "ndcg_at_10": None,           # Phase 3
+                "ndcg_at_10": None,            # Phase 3
             },
+            errors=run_output.get("warnings", []),
         )
         results.append(result)
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = config.results_dir / f"{run_id}.json"
     payload = [
         {
@@ -77,7 +112,9 @@ async def run_harness(config: HarnessConfig) -> list[EvalResult]:
     ]
     with out_path.open("w") as f:
         json.dump(payload, f, indent=2)
-    print(f"Results written to {out_path} ({len(results)} fixtures)")
+
+    passed = sum(1 for r in results if r.metrics.get("structural_accuracy") == 1.0)
+    print(f"\n{passed}/{len(results)} fixtures passed — results written to {out_path}")
     return results
 
 
