@@ -1,14 +1,18 @@
 from contextlib import asynccontextmanager
 
 import structlog
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from omnivore.api.routes import health
+from omnivore.api.routes import documents, handlers_route, search
 from omnivore.api.schemas import APIResponse, ErrorDetail
 from omnivore.config import get_settings
 from omnivore.logging_config import configure_logging
+from omnivore.pipeline.registry import registry
 
 logger = structlog.get_logger(__name__)
 
@@ -17,8 +21,15 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings)
-    logger.info("startup", environment=settings.ENVIRONMENT)
+
+    registry.discover()
+    logger.info("startup", environment=settings.ENVIRONMENT, handlers=len(registry.all_handlers()))
+
+    app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+
     yield
+
+    await app.state.arq_pool.close()
     logger.info("shutdown")
 
 
@@ -37,6 +48,9 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/v1")
+app.include_router(documents.router, prefix="/v1")
+app.include_router(search.router, prefix="/v1")
+app.include_router(handlers_route.router, prefix="/v1")
 
 
 @app.get("/", include_in_schema=False)

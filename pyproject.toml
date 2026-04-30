@@ -21,10 +21,25 @@ dependencies = [
     "python-multipart",
     "httpx",
     "pgvector",
+    "pymupdf",
+    "pdfplumber",
+    "python-docx",
+    "markdown-it-py",
+    "selectolax",
+    "polars",
+    "openpyxl",
+    "tiktoken",
 ]
 
 [project.entry-points."omnivore.handlers"]
-# Phase 1: register handlers here
+pdf = "omnivore.pipeline.handlers.pdf:PdfHandler"
+docx = "omnivore.pipeline.handlers.docx:DocxHandler"
+text = "omnivore.pipeline.handlers.text:PlainTextHandler"
+markdown = "omnivore.pipeline.handlers.text:MarkdownHandler"
+html = "omnivore.pipeline.handlers.html:HtmlHandler"
+json = "omnivore.pipeline.handlers.json_handler:JsonHandler"
+csv = "omnivore.pipeline.handlers.csv_handler:CsvHandler"
+xlsx = "omnivore.pipeline.handlers.xlsx:XlsxHandler"
 
 [dependency-groups]
 dev = [
