@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 
 import aioboto3
@@ -14,15 +13,16 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnivore.api.schemas import APIResponse, ErrorDetail
+from omnivore.api.schemas import APIResponse
 from omnivore.config import get_settings
-from omnivore.db.models import Document
+from omnivore.db.models import Document, Outbox
 from omnivore.db.session import get_db
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = structlog.get_logger(__name__)
 
 _ALLOWED_STATUSES = {"queued", "extracting", "enriching", "indexed", "failed", "duplicate"}
+_STREAM_CHUNK = 1 << 20  # 1 MB read chunks
 
 
 @router.post("", status_code=202)
@@ -34,34 +34,51 @@ async def upload_document(
     settings = get_settings()
     tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000001")  # Phase 4: real tenant from JWT
 
-    raw = await file.read()
-    if len(raw) > settings.MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
+    # Stream file in chunks: compute sha256 incrementally, sniff MIME from first 2 KB
+    hasher = hashlib.sha256()
+    mime_header = b""
+    total = 0
 
-    sha256 = hashlib.sha256(raw).digest()
-    detected_mime = magic.from_buffer(raw[:2048], mime=True)
+    while True:
+        chunk = await file.read(_STREAM_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > settings.MAX_UPLOAD_SIZE_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
+        hasher.update(chunk)
+        if len(mime_header) < 2048:
+            mime_header += chunk[: 2048 - len(mime_header)]
+
+    sha256_digest = hasher.digest()
+    detected_mime = magic.from_buffer(mime_header, mime=True)
 
     # Dedup check
     existing = await db.scalar(
-        select(Document).where(Document.tenant_id == tenant_id, Document.sha256 == sha256)
+        select(Document).where(Document.tenant_id == tenant_id, Document.sha256 == sha256_digest)
     )
     if existing:
         return JSONResponse(
             status_code=202,
             content=APIResponse(
                 success=True,
-                data={"document_id": str(existing.id), "status": "duplicate", "poll_url": f"/v1/documents/{existing.id}"},
+                data={
+                    "document_id": str(existing.id),
+                    "status": "duplicate",
+                    "poll_url": f"/v1/documents/{existing.id}",
+                },
             ).model_dump(),
         )
 
     document_id = uuid.uuid4()
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
-    storage_key = f"raw/{tenant_id}/{datetime.now(timezone.utc).strftime('%Y/%m')}/{document_id}.{ext}"
+    storage_key = f"raw/{tenant_id}/{datetime.now(datetime.UTC).strftime('%Y/%m')}/{document_id}.{ext}"
 
-    # Upload to MinIO
+    # Stream from Starlette's spooled temp file directly to MinIO — no full-file buffer in memory
+    await file.seek(0)
     endpoint = f"{'https' if settings.MINIO_SECURE else 'http'}://{settings.MINIO_ENDPOINT}"
-    session = aioboto3.Session()
-    async with session.client(
+    s3_session = aioboto3.Session()
+    async with s3_session.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=settings.MINIO_ACCESS_KEY,
@@ -69,41 +86,55 @@ async def upload_document(
         region_name="us-east-1",
     ) as s3:
         await _ensure_bucket(s3, settings.MINIO_BUCKET)
-        await s3.put_object(
-            Bucket=settings.MINIO_BUCKET,
-            Key=storage_key,
-            Body=raw,
-            ContentType=detected_mime,
+        await s3.upload_fileobj(
+            file.file,
+            settings.MINIO_BUCKET,
+            storage_key,
+            ExtraArgs={"ContentType": detected_mime},
         )
 
+    # Transactional outbox: Document + Outbox row committed atomically.
+    # If enqueue fails after commit, the relay job drains unpublished outbox rows.
+    job_kwargs = {
+        "document_id": str(document_id),
+        "mime": detected_mime,
+        "size": total,
+        "tenant_id": str(tenant_id),
+        "config_snapshot": {},
+    }
     doc = Document(
         id=document_id,
         tenant_id=tenant_id,
-        sha256=sha256,
+        sha256=sha256_digest,
         filename=file.filename or "upload",
         mime_type=detected_mime,
-        size_bytes=len(raw),
+        size_bytes=total,
         storage_uri=f"s3://{settings.MINIO_BUCKET}/{storage_key}",
         status="queued",
     )
+    outbox_entry = Outbox(
+        aggregate_id=document_id,
+        event_type="ingest.dispatch",
+        payload={"task": "ingest_dispatch", "kwargs": job_kwargs},
+    )
     db.add(doc)
+    db.add(outbox_entry)
     await db.commit()
+    await db.refresh(outbox_entry)
 
-    # Enqueue extraction job
+    # Best-effort immediate enqueue; outbox relay handles failures
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
-        await pool.enqueue_job(
-            "ingest_dispatch",
-            document_id=str(document_id),
-            mime=detected_mime,
-            size=len(raw),
-            tenant_id=str(tenant_id),
-            config_snapshot={},
-        )
+        try:
+            await pool.enqueue_job("ingest_dispatch", **job_kwargs)
+            outbox_entry.published_at = datetime.now(datetime.UTC)
+            await db.commit()
+        except Exception:
+            logger.warning("arq.enqueue.failed_will_replay", document_id=str(document_id))
     else:
         logger.warning("arq_pool.not_initialized", document_id=str(document_id))
 
-    logger.info("document.queued", document_id=str(document_id), mime=detected_mime, size=len(raw))
+    logger.info("document.queued", document_id=str(document_id), mime=detected_mime, size=total)
     return JSONResponse(
         status_code=202,
         content=APIResponse(

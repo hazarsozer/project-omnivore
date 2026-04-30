@@ -1,21 +1,23 @@
 # Omnivore
 
-A universal document ingestion pipeline. Upload any file — PDF, audio, spreadsheet, video, code — and get back structured intelligence: text chunks with embeddings for semantic search, extracted tables for SQL queries, named entities, summaries, and transcriptions. All routed to PostgreSQL so you can search and query everything from one place.
+A Postgres-native document ingestion pipeline for RAG systems. Upload text documents and structured data — PDF, DOCX, spreadsheets, HTML, JSON — and get back structured intelligence stored directly in PostgreSQL: chunked text with full lineage, extracted tables queryable as SQL, and rich metadata. No separate vector database required.
 
-## What it does
+> **Current state (Phase 1 complete):** Text and structured-data formats work end-to-end — upload → extract → chunk → persist. Audio, video, OCR, embeddings, and search are planned for Phase 2+. See the roadmap below.
+
+## What works today
 
 ```
-You upload a file
+You upload a file (PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX)
         │
         ▼
 Omnivore detects the format, routes it to the right handler,
-extracts everything useful, and stores it in PostgreSQL.
+extracts text blocks and tables, chunks content structure-first,
+and stores everything in PostgreSQL.
         │
         ▼
-You query it — semantic search, SQL, or both.
+You query chunks and tables — SQL JOINs across document text
+and extracted spreadsheet rows from one database.
 ```
-
-No matter what goes in — a scanned PDF, a podcast, a spreadsheet, a JSON dump — the output is the same shape: searchable chunks, queryable rows, and rich metadata side by side in one database.
 
 ## Supported formats
 

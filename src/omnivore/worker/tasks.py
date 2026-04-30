@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import structlog
 from sqlalchemy import select
 
 from omnivore.config import get_settings
 from omnivore.db.models import Chunk as ChunkRow
-from omnivore.db.models import Document, ExtractedRow, ExtractedTable
+from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox
 from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.chunker import chunk_result
 from omnivore.pipeline.context import BlobRef, IngestContext
-from omnivore.pipeline.models import StructuredTable
 from omnivore.pipeline.registry import registry
 from omnivore.worker.context import ArqWorkflowContext
 
@@ -109,7 +108,7 @@ async def ingest_dispatch(
                 db.add(ExtractedRow(table_id=et.id, ordinal=i, data=row))
 
         doc.status = "indexed"
-        doc.indexed_at = datetime.now(timezone.utc)
+        doc.indexed_at = datetime.now(datetime.UTC)
         doc.metadata = result.metadata
         await db.commit()
 
@@ -124,8 +123,43 @@ async def ingest_dispatch(
     return {"status": "indexed", "document_id": document_id, "chunks": len(chunks)}
 
 
+async def outbox_relay(ctx: dict) -> dict:
+    """Drain unpublished outbox entries into ARQ. Runs every 30 s as enqueue failure safety net."""
+    redis = ctx["redis"]
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.scalars(
+                select(Outbox)
+                .where(Outbox.published_at.is_(None))
+                .order_by(Outbox.id)
+                .limit(50)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+
+        if not rows:
+            return {"published": 0}
+
+        published = 0
+        for row in rows:
+            task = row.payload.get("task", "ingest_dispatch")
+            kwargs = row.payload.get("kwargs", {})
+            try:
+                await redis.enqueue_job(task, **kwargs)
+                row.published_at = datetime.now(datetime.UTC)
+                published += 1
+            except Exception:
+                logger.warning("outbox_relay.enqueue_failed", outbox_id=row.id)
+
+        await db.commit()
+
+    logger.info("outbox_relay.complete", published=published)
+    return {"published": published}
+
+
 async def on_startup(ctx: dict) -> None:
-    settings = get_settings()
+    get_settings()  # warm the lru_cache singleton
     registry.discover()
     logger.info("worker.startup", handlers=len(registry.all_handlers()))
 
