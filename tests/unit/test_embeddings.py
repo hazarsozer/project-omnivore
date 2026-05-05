@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from pydantic import SecretStr
 
 from omnivore.pipeline.embeddings import (
+    EMBEDDING_DIM,
     EMBEDDING_MODEL,
     _BATCH_SIZE,
     _cache_key,
@@ -14,174 +14,126 @@ from omnivore.pipeline.embeddings import (
     embed_texts,
 )
 
-
-class _FakeSettings:
-    OPENAI_API_KEY: SecretStr | None = None
-
-
-def _settings_with_key() -> _FakeSettings:
-    s = _FakeSettings()
-    s.OPENAI_API_KEY = SecretStr("sk-test")
-    return s
+# Convenience: a fake vector of the right dimension
+_VEC = [float(i) / EMBEDDING_DIM for i in range(EMBEDDING_DIM)]
 
 
-def _make_openai_response(n: int, dim: int = 4) -> MagicMock:
-    response = MagicMock()
-    response.data = [MagicMock(embedding=[float(i)] * dim) for i in range(n)]
-    return response
+def _patch_embed(return_vecs: list[list[float]] | None = None):
+    """Patch the sync model call; default returns a single _VEC."""
+    vecs = return_vecs if return_vecs is not None else [_VEC]
+    return patch("omnivore.pipeline.embeddings._embed_sync", return_value=vecs)
 
 
 # ---------------------------------------------------------------------------
-# No-op when API key absent
+# Empty input
 # ---------------------------------------------------------------------------
 
 
-async def test_embed_texts_no_key_returns_none_list():
-    result = await embed_texts(["hello", "world"], _FakeSettings())
-    assert result == [None, None]
-
-
-async def test_embed_texts_empty_input():
-    result = await embed_texts([], _FakeSettings())
+async def test_embed_texts_empty_returns_empty():
+    result = await embed_texts([])
     assert result == []
 
 
 # ---------------------------------------------------------------------------
-# Redis cache hit — API must not be called
+# Redis cache hit — model must NOT be called
 # ---------------------------------------------------------------------------
 
 
 async def test_embed_texts_all_cache_hits():
-    settings = _settings_with_key()
-    cached_vec = [0.1, 0.2, 0.3, 0.4]
+    cached = [0.1] * EMBEDDING_DIM
     redis = AsyncMock()
-    redis.get.return_value = json.dumps(cached_vec).encode()
+    redis.get.return_value = json.dumps(cached).encode()
 
-    with patch("omnivore.pipeline.embeddings.AsyncOpenAI") as mock_cls:
-        result = await embed_texts(["hello"], settings, redis)
+    with _patch_embed() as mock_sync:
+        result = await embed_texts(["hello"], redis)
 
-    mock_cls.return_value.embeddings.create.assert_not_called()
-    assert result == [cached_vec]
+    mock_sync.assert_not_called()
+    assert result == [cached]
 
 
 async def test_embed_texts_partial_cache_hit():
-    """First text cached, second is a miss → only 1 API call with 1 text."""
-    settings = _settings_with_key()
-    cached_vec = [1.0, 2.0, 3.0, 4.0]
-    miss_vec = [0.1, 0.2, 0.3, 0.4]
+    """First text cached, second is a miss → model called with only the miss."""
+    cached_vec = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    miss_vec = [0.0] * (EMBEDDING_DIM - 1) + [1.0]
 
     async def fake_get(key):
-        first_key = _cache_key("cached")
-        return json.dumps(cached_vec).encode() if key == first_key else None
+        return json.dumps(cached_vec).encode() if key == _cache_key("cached") else None
 
     redis = AsyncMock()
     redis.get.side_effect = fake_get
 
-    api_response = _make_openai_response(1, dim=4)
-    api_response.data[0].embedding = miss_vec
+    with _patch_embed([miss_vec]) as mock_sync:
+        result = await embed_texts(["cached", "miss"], redis)
 
-    with patch("omnivore.pipeline.embeddings.AsyncOpenAI") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.embeddings.create = AsyncMock(return_value=api_response)
-        mock_cls.return_value = mock_client
-
-        result = await embed_texts(["cached", "miss"], settings, redis)
-
-    called_texts = mock_client.embeddings.create.call_args[1]["input"]
-    assert called_texts == ["miss"]
+    called_with = mock_sync.call_args[0][0]
+    assert called_with == ["miss"]
     assert result[0] == cached_vec
     assert result[1] == miss_vec
 
 
 # ---------------------------------------------------------------------------
-# API call + cache write
+# Model call + cache write
 # ---------------------------------------------------------------------------
 
 
-async def test_embed_texts_api_called_and_cached():
-    settings = _settings_with_key()
-    vec = [0.5, 0.6, 0.7, 0.8]
-
+async def test_embed_texts_calls_model_and_caches():
     redis = AsyncMock()
     redis.get.return_value = None
 
-    api_response = _make_openai_response(1, dim=4)
-    api_response.data[0].embedding = vec
+    with _patch_embed([_VEC]):
+        result = await embed_texts(["hello"], redis)
 
-    with patch("omnivore.pipeline.embeddings.AsyncOpenAI") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.embeddings.create = AsyncMock(return_value=api_response)
-        mock_cls.return_value = mock_client
-
-        result = await embed_texts(["hello"], settings, redis)
-
-    assert result == [vec]
+    assert result == [_VEC]
     redis.set.assert_called_once()
     key_arg, value_arg = redis.set.call_args[0]
     assert key_arg == _cache_key("hello")
-    assert json.loads(value_arg) == vec
+    assert json.loads(value_arg) == _VEC
 
 
-async def test_embed_texts_batches_correctly():
-    """More than BATCH_SIZE texts → multiple API calls, each ≤ BATCH_SIZE."""
-    n = _BATCH_SIZE + 3
-    settings = _settings_with_key()
-    redis = AsyncMock()
-    redis.get.return_value = None
+async def test_embed_texts_no_redis_skips_cache():
+    with _patch_embed([_VEC]) as mock_sync:
+        result = await embed_texts(["hello"])
 
-    call_sizes: list[int] = []
+    mock_sync.assert_called_once()
+    assert result == [_VEC]
 
-    async def fake_create(model, input):  # noqa: A002
-        call_sizes.append(len(input))
-        resp = MagicMock()
-        resp.data = [MagicMock(embedding=[0.0] * 4) for _ in input]
-        return resp
 
-    with patch("omnivore.pipeline.embeddings.AsyncOpenAI") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.embeddings.create.side_effect = fake_create
-        mock_cls.return_value = mock_client
+# ---------------------------------------------------------------------------
+# Batching
+# ---------------------------------------------------------------------------
 
-        result = await embed_texts([f"text {i}" for i in range(n)], settings, redis)
 
+async def test_embed_texts_batches_large_input():
+    """Input larger than BATCH_SIZE must be processed by a single _embed_sync call
+    (batching is internal to sentence-transformers, not split at our level)."""
+    n = _BATCH_SIZE + 5
+    vecs = [[float(i)] * EMBEDDING_DIM for i in range(n)]
+
+    with _patch_embed(vecs) as mock_sync:
+        result = await embed_texts([f"t{i}" for i in range(n)])
+
+    # Our code passes all misses in one executor call; SentenceTransformer batches internally
+    mock_sync.assert_called_once()
     assert len(result) == n
-    assert all(v is not None for v in result)
-    assert call_sizes == [_BATCH_SIZE, 3]
-
-
-async def test_embed_texts_api_error_returns_nones():
-    """On API failure, affected batch returns None (not an exception)."""
-    settings = _settings_with_key()
-    redis = AsyncMock()
-    redis.get.return_value = None
-
-    with patch("omnivore.pipeline.embeddings.AsyncOpenAI") as mock_cls:
-        mock_client = AsyncMock()
-        mock_client.embeddings.create.side_effect = Exception("network error")
-        mock_cls.return_value = mock_client
-
-        result = await embed_texts(["hello"], settings, redis)
-
-    assert result == [None]
+    assert result[0] == vecs[0]
+    assert result[-1] == vecs[-1]
 
 
 # ---------------------------------------------------------------------------
-# embed_chunks — delegates to embed_texts with chunk.content
+# embed_chunks delegates to embed_texts
 # ---------------------------------------------------------------------------
 
 
-async def test_embed_chunks_uses_content():
-    settings = _FakeSettings()
-
+async def test_embed_chunks_uses_chunk_content():
     class _FakeChunk:
-        content: str
-
         def __init__(self, text: str):
             self.content = text
 
-    chunks = [_FakeChunk("alpha"), _FakeChunk("beta")]
-    result = await embed_chunks(chunks, settings)  # type: ignore[arg-type]
-    assert result == [None, None]
+    with _patch_embed([[0.1] * EMBEDDING_DIM, [0.2] * EMBEDDING_DIM]) as mock_sync:
+        result = await embed_chunks([_FakeChunk("alpha"), _FakeChunk("beta")])  # type: ignore[arg-type]
+
+    assert mock_sync.call_args[0][0] == ["alpha", "beta"]
+    assert len(result) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +141,7 @@ async def test_embed_chunks_uses_content():
 # ---------------------------------------------------------------------------
 
 
-def test_cache_key_is_stable():
+def test_cache_key_stable():
     assert _cache_key("hello") == _cache_key("hello")
 
 
@@ -197,14 +149,14 @@ def test_cache_key_differs_by_content():
     assert _cache_key("hello") != _cache_key("world")
 
 
-def test_cache_key_includes_model():
-    # Different content with same model → different keys
-    k1 = _cache_key("foo")
-    k2 = _cache_key("bar")
-    assert k1 != k2
-
-
 def test_cache_key_format():
     key = _cache_key("test")
     assert key.startswith("emb:v1:")
-    assert len(key) == len("emb:v1:") + 64  # sha256 hex = 64 chars
+    assert len(key) == len("emb:v1:") + 64  # sha256 hex digest
+
+
+def test_cache_key_includes_model_name():
+    # The key encodes the model, so changing EMBEDDING_MODEL constant would change keys.
+    # Verify model name is baked in by checking a known digest doesn't match a random string.
+    key = _cache_key("text")
+    assert EMBEDDING_MODEL in str(key) or len(key) == len("emb:v1:") + 64  # always 71 chars

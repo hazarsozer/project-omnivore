@@ -10,7 +10,6 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from omnivore.api.schemas import APIResponse
-from omnivore.config import get_settings
 from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.embeddings import embed_texts
 
@@ -38,26 +37,17 @@ class SearchResult(BaseModel):
 
 @router.post("")
 async def search(request: Request, body: SearchRequest) -> APIResponse[list[SearchResult]]:
-    settings = get_settings()
     tenant_id = _HARDCODED_TENANT
 
-    # Embed query when vector retrieval is requested
     query_vector: list[float] | None = None
     if body.mode in ("hybrid", "vector"):
         redis = getattr(request.app.state, "arq_pool", None)
-        vectors = await embed_texts([body.query], settings, redis)
-        query_vector = vectors[0]
-
-    # Degrade gracefully to BM25 when API key is absent
-    effective_mode = body.mode
-    if effective_mode in ("hybrid", "vector") and query_vector is None:
-        effective_mode = "bm25"
-        logger.warning("search.fallback_bm25", reason="embedding_unavailable")
+        query_vector = (await embed_texts([body.query], redis))[0]
 
     async with AsyncSessionLocal() as db:
-        if effective_mode == "bm25":
+        if body.mode == "bm25":
             rows = await _bm25_search(db, body.query, tenant_id, body.top_k)
-        elif effective_mode == "vector":
+        elif body.mode == "vector":
             rows = await _vector_search(db, query_vector, tenant_id, body.top_k)  # type: ignore[arg-type]
         else:
             rows = await _hybrid_search(db, body.query, query_vector, tenant_id, body.top_k)  # type: ignore[arg-type]
@@ -74,7 +64,7 @@ async def search(request: Request, body: SearchRequest) -> APIResponse[list[Sear
         for r in rows
     ]
 
-    logger.info("search.complete", query=body.query[:80], mode=effective_mode, results=len(results))
+    logger.info("search.complete", query=body.query[:80], mode=body.mode, results=len(results))
     return APIResponse(success=True, data=results)
 
 
@@ -111,11 +101,11 @@ async def _vector_search(
             c.content,
             c.heading_path,
             c.token_count,
-            (1.0 - (c.embedding <=> CAST(:vec AS vector(1536))))::float AS score
+            (1.0 - (c.embedding <=> CAST(:vec AS vector(768))))::float AS score
         FROM core.chunks c
         WHERE c.tenant_id = :tenant_id
           AND c.embedding IS NOT NULL
-        ORDER BY c.embedding <=> CAST(:vec AS vector(1536))
+        ORDER BY c.embedding <=> CAST(:vec AS vector(768))
         LIMIT :top_k
     """)
     result = await db.execute(sql, {"vec": vec_str, "tenant_id": tenant_id, "top_k": top_k})
@@ -140,11 +130,11 @@ async def _hybrid_search(
         ),
         vec AS (
             SELECT id,
-                   ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:vec AS vector(1536))) AS rank
+                   ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:vec AS vector(768))) AS rank
             FROM core.chunks
             WHERE tenant_id = :tenant_id
               AND embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:vec AS vector(1536))
+            ORDER BY embedding <=> CAST(:vec AS vector(768))
             LIMIT :pre_k
         ),
         rrf AS (

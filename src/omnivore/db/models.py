@@ -86,7 +86,7 @@ class Chunk(Base):
     heading_path: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     source_block_ids: Mapped[list[uuid.UUID] | None] = mapped_column(ARRAY(UUID(as_uuid=True)))
     table_lineage: Mapped[dict | None] = mapped_column(JSONB)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
     embedding_model: Mapped[str | None] = mapped_column(Text)
     language: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)

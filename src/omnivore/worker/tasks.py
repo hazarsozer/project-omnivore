@@ -75,8 +75,8 @@ async def ingest_dispatch(
 
         chunks = chunk_result(result, t_id)
 
-        # Embed chunks (no-op when OPENAI_API_KEY is absent)
-        vectors = await embed_chunks(chunks, settings, redis=ctx.get("redis"))
+        # Embed chunks locally (BGE-base, no external API)
+        vectors = await embed_chunks(chunks, redis=ctx.get("redis"))
 
         # Persist chunks
         for chunk, vector in zip(chunks, vectors):
@@ -95,7 +95,7 @@ async def ingest_dispatch(
                     language=chunk.language,
                     confidence=chunk.confidence,
                     embedding=vector,
-                    embedding_model=EMBEDDING_MODEL if vector is not None else None,
+                    embedding_model=EMBEDDING_MODEL,
                 )
             )
 
