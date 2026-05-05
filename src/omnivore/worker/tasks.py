@@ -12,6 +12,7 @@ from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox
 from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.chunker import chunk_result
 from omnivore.pipeline.context import BlobRef, IngestContext
+from omnivore.pipeline.embeddings import EMBEDDING_MODEL, embed_chunks
 from omnivore.pipeline.registry import registry
 from omnivore.worker.context import ArqWorkflowContext
 
@@ -74,8 +75,11 @@ async def ingest_dispatch(
 
         chunks = chunk_result(result, t_id)
 
+        # Embed chunks (no-op when OPENAI_API_KEY is absent)
+        vectors = await embed_chunks(chunks, settings, redis=ctx.get("redis"))
+
         # Persist chunks
-        for chunk in chunks:
+        for chunk, vector in zip(chunks, vectors):
             db.add(
                 ChunkRow(
                     document_id=chunk.document_id,
@@ -90,6 +94,8 @@ async def ingest_dispatch(
                     table_lineage=chunk.table_lineage,
                     language=chunk.language,
                     confidence=chunk.confidence,
+                    embedding=vector,
+                    embedding_model=EMBEDDING_MODEL if vector is not None else None,
                 )
             )
 
