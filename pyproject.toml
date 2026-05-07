@@ -30,6 +30,8 @@ dependencies = [
     "openpyxl",
     "tiktoken",
     "sentence-transformers>=5.4.1",
+    "faster-whisper>=1.2.1",
+    "easyocr>=1.7.2",
 ]
 
 [project.entry-points."omnivore.handlers"]
@@ -41,6 +43,9 @@ html = "omnivore.pipeline.handlers.html:HtmlHandler"
 json = "omnivore.pipeline.handlers.json_handler:JsonHandler"
 csv = "omnivore.pipeline.handlers.csv_handler:CsvHandler"
 xlsx = "omnivore.pipeline.handlers.xlsx:XlsxHandler"
+audio = "omnivore.pipeline.handlers.audio:AudioHandler"
+video = "omnivore.pipeline.handlers.video:VideoHandler"
+image-ocr = "omnivore.pipeline.handlers.image:ImageOcrHandler"
 
 [dependency-groups]
 dev = [

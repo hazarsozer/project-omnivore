@@ -79,6 +79,33 @@ services:
         condition: service_healthy
     command: python -m omnivore.worker.main
 
+  # GPU worker — processes arq:gpu queue (audio, video, OCR handlers).
+  # Requires NVIDIA Container Toolkit: docker compose --profile gpu up -d worker-gpu
+  worker-gpu:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    env_file: .env
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: python -m omnivore.worker.gpu_main
+    profiles:
+      - gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   postgres_data:
   redis_data:

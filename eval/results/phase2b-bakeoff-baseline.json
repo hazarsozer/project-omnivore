@@ -1,0 +1,71 @@
+{
+  "run_at": "2026-05-07T17:44:13.016834+00:00",
+  "run_id": "20260507T174413Z",
+  "k": 10,
+  "reference_model": "bge-base",
+  "candidates": [
+    {
+      "key": "bge-base",
+      "model_id": "BAAI/bge-base-en-v1.5",
+      "mean_recall_at_10": 1.0,
+      "mean_ndcg_at_10": 1.0,
+      "error": null,
+      "query_scores": [
+        {
+          "fixture_id": "html-001",
+          "query": "What file formats does Phase 1 support?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "html-001",
+          "query": "How is extracted content stored?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "html-001",
+          "query": "What is the Omnivore pipeline designed for?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "md-001",
+          "query": "What technology provides the REST API?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "md-001",
+          "query": "How do I run the infrastructure stack?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "md-001",
+          "query": "What processes jobs from Redis?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "What database stores extracted document data?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "How do I get started with the project?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "What is Omnivore?",
+          "recall_at_10": 1.0,
+          "ndcg_at_10": 1.0
+        }
+      ]
+    }
+  ]
+}

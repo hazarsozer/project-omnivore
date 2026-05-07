@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
@@ -28,17 +29,58 @@ class MetricsEvaluator(Protocol):
 
 class StubMetricsEvaluator:
     async def extraction_accuracy(self, result: dict, expected: dict) -> float | None:
-        return None  # implemented in Phase 3
+        return None  # Phase 3
 
     async def chunk_faithfulness(self, chunks: list[dict], source_content: str) -> float | None:
-        return None  # implemented in Phase 3
+        return None  # Phase 3
 
     async def retrieval_recall_at_k(
         self, query_results: list[dict], relevant_ids: set[str], k: int
     ) -> float | None:
-        return None  # implemented in Phase 3
+        return None  # Phase 3
 
     async def ndcg_at_k(
         self, query_results: list[dict], relevance_scores: dict[str, int], k: int
     ) -> float | None:
-        return None  # implemented in Phase 3
+        return None  # Phase 3
+
+
+class LiveMetricsEvaluator:
+    """Real recall@k and nDCG@k metrics for the Phase 2b embedding bakeoff.
+
+    query_results: list of {"chunk_id": str, "score": float} ranked best-first.
+    relevant_ids: set of chunk IDs considered ground-truth relevant.
+    relevance_scores: dict {chunk_id: int} where higher = more relevant (binary: 0 or 1).
+    """
+
+    async def extraction_accuracy(self, result: dict, expected: dict) -> float | None:
+        return None  # Phase 3
+
+    async def chunk_faithfulness(self, chunks: list[dict], source_content: str) -> float | None:
+        return None  # Phase 3
+
+    async def retrieval_recall_at_k(
+        self, query_results: list[dict], relevant_ids: set[str], k: int
+    ) -> float | None:
+        if not relevant_ids:
+            return None
+        retrieved = {r["chunk_id"] for r in query_results[:k]}
+        return round(len(retrieved & relevant_ids) / len(relevant_ids), 4)
+
+    async def ndcg_at_k(
+        self, query_results: list[dict], relevance_scores: dict[str, int], k: int
+    ) -> float | None:
+        if not relevance_scores:
+            return None
+
+        dcg = 0.0
+        for rank, result in enumerate(query_results[:k], start=1):
+            rel = relevance_scores.get(result["chunk_id"], 0)
+            dcg += rel / math.log2(rank + 1)
+
+        ideal_rels = sorted(relevance_scores.values(), reverse=True)[:k]
+        idcg = sum(rel / math.log2(rank + 1) for rank, rel in enumerate(ideal_rels, start=1))
+
+        if idcg == 0.0:
+            return 0.0
+        return round(dcg / idcg, 4)

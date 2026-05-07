@@ -12,5 +12,19 @@
   "difficulty": "easy",
   "languages": ["en"],
   "has_tables": false,
-  "noise_excluded": ["Sidebar content", "Footer content", "Documentation"]
+  "noise_excluded": ["Sidebar content", "Footer content", "Documentation"],
+  "queries": [
+    {
+      "query": "What file formats does Phase 1 support?",
+      "relevant_content_substrings": ["PDF, DOCX", "PDF"]
+    },
+    {
+      "query": "How is extracted content stored?",
+      "relevant_content_substrings": ["PostgreSQL with pgvector", "pgvector"]
+    },
+    {
+      "query": "What is the Omnivore pipeline designed for?",
+      "relevant_content_substrings": ["document ingestion", "Postgres-native RAG"]
+    }
+  ]
 }

@@ -12,5 +12,19 @@
   "difficulty": "easy",
   "languages": ["en"],
   "has_tables": false,
-  "has_code_blocks": true
+  "has_code_blocks": true,
+  "queries": [
+    {
+      "query": "What technology provides the REST API?",
+      "relevant_content_substrings": ["FastAPI"]
+    },
+    {
+      "query": "How do I run the infrastructure stack?",
+      "relevant_content_substrings": ["docker compose", "alembic upgrade"]
+    },
+    {
+      "query": "What processes jobs from Redis?",
+      "relevant_content_substrings": ["ARQ workers", "Redis"]
+    }
+  ]
 }

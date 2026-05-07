@@ -11,5 +11,19 @@
   "expected_table_count": 0,
   "difficulty": "easy",
   "languages": ["en"],
-  "has_tables": false
+  "has_tables": false,
+  "queries": [
+    {
+      "query": "What database stores extracted document data?",
+      "relevant_content_substrings": ["PostgreSQL", "pgvector"]
+    },
+    {
+      "query": "How do I get started with the project?",
+      "relevant_content_substrings": ["docker compose", "environment", "uv"]
+    },
+    {
+      "query": "What is Omnivore?",
+      "relevant_content_substrings": ["universal document ingestion", "structured intelligence"]
+    }
+  ]
 }

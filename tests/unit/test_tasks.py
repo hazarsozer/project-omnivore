@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from omnivore.pipeline.models import Chunk as PipelineChunk
 from omnivore.pipeline.models import ExtractionResult
-from omnivore.worker.tasks import ingest_dispatch, outbox_relay
+from omnivore.worker.tasks import gpu_ingest_dispatch, ingest_dispatch, outbox_relay
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,6 +53,20 @@ def _make_fake_handler(result: ExtractionResult) -> type:
             return result
 
     return FakeHandler
+
+
+def _make_gpu_handler(result: ExtractionResult) -> type:
+    class FakeGpuHandler:
+        name = "fake-gpu"
+        version = "0.0.1"
+        accepts = ("audio/mpeg",)
+        cost_class = "gpu"
+        timeout_seconds = 600
+
+        async def extract(self, blob, ctx):
+            return result
+
+    return FakeGpuHandler
 
 
 def _make_session_ctx(doc=None):
@@ -179,8 +193,13 @@ async def test_ingest_dispatch_adds_chunk_rows():
 async def test_ingest_dispatch_doc_not_found():
     doc_id = uuid.uuid4()
     session_local, _ = _make_session_ctx(doc=None)
+    result = _empty_result(doc_id)
 
-    with patch("omnivore.worker.tasks.AsyncSessionLocal", session_local):
+    # Handler must resolve so the request reaches _run_ingest where the DB check lives.
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
+    ):
         out = await ingest_dispatch(
             _arq_ctx(),
             document_id=str(doc_id),
@@ -333,6 +352,113 @@ async def test_ingest_dispatch_persists_extracted_tables():
     assert out["status"] == "indexed"
     # flush is called at least once (for ExtractedTable.id population)
     db.flush.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# ingest_dispatch — GPU routing
+# ---------------------------------------------------------------------------
+
+async def test_ingest_dispatch_routes_gpu_handler_to_gpu_queue():
+    """A handler with cost_class='gpu' must be enqueued on arq:gpu, not processed inline."""
+    doc_id = uuid.uuid4()
+    result = _empty_result(doc_id)
+    arq_ctx = _arq_ctx()
+
+    with patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)):
+        out = await ingest_dispatch(
+            arq_ctx,
+            document_id=str(doc_id),
+            mime="audio/mpeg",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "routed_to_gpu"
+    assert out["document_id"] == str(doc_id)
+    arq_ctx["redis"].enqueue_job.assert_awaited_once()
+    call_kwargs = arq_ctx["redis"].enqueue_job.call_args
+    assert call_kwargs.args[0] == "gpu_ingest_dispatch"
+    assert call_kwargs.kwargs["_queue_name"] == "arq:gpu"
+
+
+async def test_ingest_dispatch_cpu_handler_not_routed_to_gpu():
+    """A handler with cost_class='cpu' must not touch the GPU queue."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    session_local, _ = _make_session_ctx(doc)
+    result = _empty_result(doc_id)
+    arq_ctx = _arq_ctx()
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
+        patch("omnivore.worker.tasks.chunk_result", return_value=[]),
+        patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=[])),
+    ):
+        out = await ingest_dispatch(
+            arq_ctx,
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=100,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "indexed"
+    arq_ctx["redis"].enqueue_job.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# gpu_ingest_dispatch — happy path
+# ---------------------------------------------------------------------------
+
+async def test_gpu_ingest_dispatch_success():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    session_local, _ = _make_session_ctx(doc)
+    result = _empty_result(doc_id)
+    chunks = _one_chunk(doc_id, _TENANT_ID)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)),
+        patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
+        patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
+    ):
+        out = await gpu_ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="audio/mpeg",
+            size=5000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "indexed"
+    assert out["chunks"] == 1
+
+
+async def test_gpu_ingest_dispatch_no_handler_returns_error():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    session_local, _ = _make_session_ctx(doc)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=None),
+    ):
+        out = await gpu_ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="audio/unknown",
+            size=100,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "error"
+    assert out["reason"] == "no_handler"
 
 
 # ---------------------------------------------------------------------------

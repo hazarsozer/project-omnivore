@@ -18,10 +18,66 @@ from omnivore.worker.context import ArqWorkflowContext
 
 logger = structlog.get_logger(__name__)
 
+# Handlers whose cost_class is in this set are routed to the GPU worker queue.
+GPU_COST_CLASSES: frozenset[str] = frozenset({"gpu"})
+
 
 async def ingest_dispatch(
     ctx: dict,
     *,
+    document_id: str,
+    mime: str,
+    size: int,
+    tenant_id: str,
+    config_snapshot: dict,
+) -> dict:
+    handler_cls = registry.resolve(mime)
+    if handler_cls is None:
+        async with AsyncSessionLocal() as db:
+            doc = await db.get(Document, uuid.UUID(document_id))
+            if doc:
+                await _fail_document(db, doc, f"No handler for MIME type: {mime}")
+        return {"status": "error", "reason": "no_handler"}
+
+    if handler_cls.cost_class in GPU_COST_CLASSES:
+        logger.info("ingest.dispatch.routed_to_gpu", document_id=document_id, mime=mime)
+        await ctx["redis"].enqueue_job(
+            "gpu_ingest_dispatch",
+            _queue_name="arq:gpu",
+            document_id=document_id,
+            mime=mime,
+            size=size,
+            tenant_id=tenant_id,
+            config_snapshot=config_snapshot,
+        )
+        return {"status": "routed_to_gpu", "document_id": document_id}
+
+    return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
+
+
+async def gpu_ingest_dispatch(
+    ctx: dict,
+    *,
+    document_id: str,
+    mime: str,
+    size: int,
+    tenant_id: str,
+    config_snapshot: dict,
+) -> dict:
+    handler_cls = registry.resolve(mime)
+    if handler_cls is None:
+        async with AsyncSessionLocal() as db:
+            doc = await db.get(Document, uuid.UUID(document_id))
+            if doc:
+                await _fail_document(db, doc, f"No handler for MIME type: {mime}")
+        return {"status": "error", "reason": "no_handler"}
+
+    return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
+
+
+async def _run_ingest(
+    ctx: dict,
+    handler_cls: type,
     document_id: str,
     mime: str,
     size: int,
@@ -40,11 +96,6 @@ async def ingest_dispatch(
         if doc is None:
             logger.error("ingest.dispatch.doc_not_found", document_id=document_id)
             return {"status": "error", "reason": "document_not_found"}
-
-        handler_cls = registry.resolve(mime)
-        if handler_cls is None:
-            await _fail_document(db, doc, f"No handler for MIME type: {mime}")
-            return {"status": "error", "reason": "no_handler"}
 
         handler = handler_cls()
         bucket, key = _parse_storage_uri(doc.storage_uri)
