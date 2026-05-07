@@ -136,7 +136,8 @@ def test_relevant_ids_matches_substring():
         _make_chunk("FastAPI handles the REST layer"),
         _make_chunk("Redis enables async queues"),
     ]
-    relevant = _relevant_ids_for_query(chunks, ["PostgreSQL"])
+    ids = ["0", "1", "2"]
+    relevant = _relevant_ids_for_query(chunks, ids, ["PostgreSQL"])
     assert relevant == {"0"}
 
 
@@ -145,19 +146,20 @@ def test_relevant_ids_multiple_substrings():
         _make_chunk("PostgreSQL and pgvector for embeddings"),
         _make_chunk("FastAPI REST layer"),
     ]
-    relevant = _relevant_ids_for_query(chunks, ["PostgreSQL", "pgvector"])
+    ids = ["0", "1"]
+    relevant = _relevant_ids_for_query(chunks, ids, ["PostgreSQL", "pgvector"])
     assert "0" in relevant
 
 
 def test_relevant_ids_case_insensitive():
     chunks = [_make_chunk("POSTGRESQL stores data")]
-    relevant = _relevant_ids_for_query(chunks, ["postgresql"])
-    assert relevant == {"0"}
+    relevant = _relevant_ids_for_query(chunks, ["id-0"], ["postgresql"])
+    assert relevant == {"id-0"}
 
 
 def test_relevant_ids_empty_when_no_match():
     chunks = [_make_chunk("Completely unrelated content")]
-    relevant = _relevant_ids_for_query(chunks, ["PostgreSQL"])
+    relevant = _relevant_ids_for_query(chunks, ["0"], ["PostgreSQL"])
     assert relevant == set()
 
 
@@ -167,5 +169,6 @@ def test_relevant_ids_multiple_chunks_matched():
         _make_chunk("We use PostgreSQL for storage"),
         _make_chunk("Redis handles queues"),
     ]
-    relevant = _relevant_ids_for_query(chunks, ["PostgreSQL"])
-    assert relevant == {"0", "1"}
+    ids = ["fixture:0", "fixture:1", "fixture:2"]
+    relevant = _relevant_ids_for_query(chunks, ids, ["PostgreSQL"])
+    assert relevant == {"fixture:0", "fixture:1"}

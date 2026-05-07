@@ -41,6 +41,11 @@ async def ingest_dispatch(
 
     if handler_cls.cost_class in GPU_COST_CLASSES:
         logger.info("ingest.dispatch.routed_to_gpu", document_id=document_id, mime=mime)
+        async with AsyncSessionLocal() as db:
+            doc = await db.get(Document, uuid.UUID(document_id))
+            if doc:
+                doc.status = "routing"
+                await db.commit()
         await ctx["redis"].enqueue_job(
             "gpu_ingest_dispatch",
             _queue_name="arq:gpu",

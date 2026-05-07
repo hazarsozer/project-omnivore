@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
+from omnivore.config import get_settings
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.models import ExtractionResult, Fragment, TimePosition
 
@@ -66,13 +67,21 @@ class AudioHandler:
         return cls._model  # type: ignore[return-value]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
+        limit = get_settings().MAX_GPU_INPUT_BYTES
+        if blob.size_bytes > limit:
+            raise ValueError(
+                f"Audio file {blob.size_bytes} bytes exceeds MAX_GPU_INPUT_BYTES ({limit}). "
+                "Stream-from-blob support is planned for Phase 2c."
+            )
         data = await ctx.read_blob()
         suffix = _MIME_SUFFIXES.get(blob.mime_type, ".mp3")
 
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         try:
-            os.write(tmp_fd, data)
-            os.close(tmp_fd)
+            try:
+                os.write(tmp_fd, data)
+            finally:
+                os.close(tmp_fd)
 
             def _transcribe(path: str):
                 model = self._get_model()

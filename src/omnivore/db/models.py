@@ -36,7 +36,7 @@ class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued','extracting','enriching','indexed','failed','duplicate')",
+            "status IN ('queued','routing','extracting','enriching','indexed','failed','duplicate')",
             name="documents_status_check",
         ),
         UniqueConstraint("tenant_id", "sha256", name="documents_tenant_sha256_unique"),

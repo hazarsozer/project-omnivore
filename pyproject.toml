@@ -32,6 +32,7 @@ dependencies = [
     "sentence-transformers>=5.4.1",
     "faster-whisper>=1.2.1",
     "easyocr>=1.7.2",
+    "einops>=0.8.2",
 ]
 
 [project.entry-points."omnivore.handlers"]

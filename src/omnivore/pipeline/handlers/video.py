@@ -5,10 +5,12 @@ import math
 import os
 import subprocess
 import tempfile
+import threading
 from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
+from omnivore.config import get_settings
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.models import ExtractionResult, Fragment, TimePosition
 
@@ -27,7 +29,10 @@ _MIME_SUFFIXES: dict[str, str] = {
     "video/ogg": ".ogv",
 }
 
-_model_lock = asyncio.Lock()  # asyncio-safe; model init runs in executor
+# Module-level lock: created once at import time (import lock serializes it).
+# Matches the audio handler pattern. The previous asyncio.Lock was dead code
+# and wrong for executor-thread context.
+_model_lock = threading.Lock()
 
 
 class VideoHandler:
@@ -38,17 +43,11 @@ class VideoHandler:
     timeout_seconds: ClassVar[int] = 3600
 
     _model: ClassVar[WhisperModel | None] = None
-    _model_init_lock: ClassVar = None  # set to threading.Lock() lazily
 
     @classmethod
     def _get_model(cls) -> WhisperModel:
-        import threading
-
-        if cls._model_init_lock is None:
-            cls._model_init_lock = threading.Lock()
-
         if cls._model is None:
-            with cls._model_init_lock:
+            with _model_lock:
                 if cls._model is None:
                     import torch
                     from faster_whisper import WhisperModel as _WhisperModel
@@ -65,6 +64,12 @@ class VideoHandler:
         return cls._model  # type: ignore[return-value]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
+        limit = get_settings().MAX_GPU_INPUT_BYTES
+        if blob.size_bytes > limit:
+            raise ValueError(
+                f"Video file {blob.size_bytes} bytes exceeds MAX_GPU_INPUT_BYTES ({limit}). "
+                "Stream-from-blob support is planned for Phase 2c."
+            )
         data = await ctx.read_blob()
         video_suffix = _MIME_SUFFIXES.get(blob.mime_type, ".mp4")
 
@@ -72,8 +77,10 @@ class VideoHandler:
         vid_fd, vid_path = tempfile.mkstemp(suffix=video_suffix)
         audio_fd, audio_path = tempfile.mkstemp(suffix=".wav")
         try:
-            os.write(vid_fd, data)
-            os.close(vid_fd)
+            try:
+                os.write(vid_fd, data)
+            finally:
+                os.close(vid_fd)
             os.close(audio_fd)
 
             loop = asyncio.get_running_loop()

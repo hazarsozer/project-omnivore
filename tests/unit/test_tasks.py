@@ -361,10 +361,15 @@ async def test_ingest_dispatch_persists_extracted_tables():
 async def test_ingest_dispatch_routes_gpu_handler_to_gpu_queue():
     """A handler with cost_class='gpu' must be enqueued on arq:gpu, not processed inline."""
     doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    session_local, _ = _make_session_ctx(doc)
     result = _empty_result(doc_id)
     arq_ctx = _arq_ctx()
 
-    with patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)):
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)),
+    ):
         out = await ingest_dispatch(
             arq_ctx,
             document_id=str(doc_id),
@@ -376,6 +381,7 @@ async def test_ingest_dispatch_routes_gpu_handler_to_gpu_queue():
 
     assert out["status"] == "routed_to_gpu"
     assert out["document_id"] == str(doc_id)
+    assert doc.status == "routing"
     arq_ctx["redis"].enqueue_job.assert_awaited_once()
     call_kwargs = arq_ctx["redis"].enqueue_job.call_args
     assert call_kwargs.args[0] == "gpu_ingest_dispatch"

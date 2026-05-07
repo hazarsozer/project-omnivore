@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_SIZE_BYTES: int = 2_147_483_648
+    # GPU handlers load the full file into RAM before processing.
+    # Files larger than this are rejected before the model runs.
+    MAX_GPU_INPUT_BYTES: int = 524_288_000  # 500 MB
 
 
 @lru_cache

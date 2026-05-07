@@ -22,7 +22,7 @@ from omnivore.db.session import get_db
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = structlog.get_logger(__name__)
 
-_ALLOWED_STATUSES = {"queued", "extracting", "enriching", "indexed", "failed", "duplicate"}
+_ALLOWED_STATUSES = {"queued", "routing", "extracting", "enriching", "indexed", "failed", "duplicate"}
 _STREAM_CHUNK = 1 << 20  # 1 MB read chunks
 
 

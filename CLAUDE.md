@@ -108,10 +108,8 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 
 ## What is NOT in scope yet (don't build it ahead of its phase)
 
-- Audio/video handlers (`faster-whisper`, `ffmpeg`) — Phase 2b
-- Image OCR (PaddleOCR) — Phase 2b
-- Embedding bakeoff (BGE-base vs BGE-M3 vs nomic-embed) — Phase 2b (after Phase 2 audit closes)
-- Recall@10 baselining — Phase 2b. Requires retrieval gold-set fixtures with query/relevance judgment pairs and a `LiveMetricsEvaluator`. See `eval/results/README.md` for the plan. Do not wire retrieval metrics into the harness before Phase 2b begins.
+- Audio/video blob streaming (currently whole-file-in-RAM, max 500 MB) — Phase 2c. Needs `IngestContext.stream_blob()`.
+- Image OCR multilingual support (currently English only) — Phase 2c.
 - LLM summarization, NER, sentiment — Phase 3
 - Routing policy engine (jsonlogic) — Phase 3
 - Multi-tenant auth (JWT, API keys, RLS) — Phase 4
@@ -133,6 +131,9 @@ These are documented in `docs/architecture.md §9`. The most load-bearing ones:
 - **Q13** — Docling adoption threshold: < 10% win on gold eval set → keep PyMuPDF as default.
 - **Q14** — Visual retrieval trigger: recall@10 gap > 15% → then consider Qdrant.
 - **Q16** — Eval gold-set ownership: engineering owns it, versioned under `eval/fixtures/`.
+- **Q17** — Image OCR backend: PaddleOCR 3.x rejected — ONEDNN/PIR executor incompatibility on consumer Intel/AMD CPUs (2026-05). **EasyOCR (Apache 2.0, PyTorch-based) is the current default.** Re-evaluate PaddleOCR when they release a PIR-stable CPU wheel.
+- **Q18** — GPU worker blob streaming: audio/video handlers load whole file into RAM before processing (max 500 MB via `MAX_GPU_INPUT_BYTES`). Streaming requires `IngestContext.stream_blob() → AsyncIterator[bytes]`. Gate: first file > 500 MB rejected in prod → implement streaming.
+- **Q19** — Bakeoff result: BGE-M3 beats BGE-base by 18.7% recall@1 and 43.6% recall@3 on 9-chunk pooled corpus. Exceeds the 10% switch threshold. Switching blocked pending: (a) larger fixture set for statistical confidence, (b) DB vector column resize (768 → 1024) migration. See `eval/results/phase2b-bakeoff-baseline.json`.
 
 ---
 
@@ -187,7 +188,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 0 — Skeleton | FastAPI, ARQ, Postgres schema, eval harness | Done |
 | 1 — Text formats | PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers + chunker + upload API | Done |
 | 2 — Embeddings + hybrid search | BGE-base-en-v1.5 (local) + pgvector + BM25/vector/RRF endpoint | **Done** — 125 unit tests, 6 E2E tests, 5/5 eval fixtures. Audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). |
-| 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR, embedding bakeoff | Next |
+| 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR (EasyOCR), GPU worker queue, embedding bakeoff | **Done** — 176 unit tests, 6 E2E. Bakeoff: BGE-M3 +18.7% recall@1 vs BGE-base. Audit closed 2026-05-07. See [`docs/phase2b-audit.md`](docs/phase2b-audit.md). |
 | 3 — Enrichment | LLM summary, NER, routing policy | — |
 | 4 — Multi-tenant | API keys, JWT, rate limiting, RLS | — |
 | 5 — Observability | OTel, Prometheus, Grafana, Loki | — |

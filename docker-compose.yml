@@ -80,7 +80,10 @@ services:
     command: python -m omnivore.worker.main
 
   # GPU worker — processes arq:gpu queue (audio, video, OCR handlers).
-  # Requires NVIDIA Container Toolkit: docker compose --profile gpu up -d worker-gpu
+  # Requires NVIDIA Container Toolkit (nvidia-docker): docker compose --profile gpu up -d worker-gpu
+  # Without NVIDIA Container Toolkit, run host-side instead:
+  #   uv run python -m omnivore.worker.gpu_main
+  # Verified: host-side startup confirmed on 2026-05-07 (gpu_worker.startup handlers=11).
   worker-gpu:
     build:
       context: .
