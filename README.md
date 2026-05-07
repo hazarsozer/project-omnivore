@@ -2,7 +2,7 @@
 
 A Postgres-native document ingestion pipeline for RAG systems. Upload text documents and structured data — PDF, DOCX, spreadsheets, HTML, JSON — and get back structured intelligence stored directly in PostgreSQL: chunked text with full lineage, extracted tables queryable as SQL, and rich metadata. No separate vector database required.
 
-> **Current state (Phase 2 Done — Phase 2b next):** Phase 1 text + structured-data formats work end-to-end. Phase 2 (local BGE-base embeddings + hybrid BM25/vector/RRF search) is shipped — 125 unit tests, 6 E2E tests, 5/5 eval fixtures PASS, `ruff check src/ tests/` clean. Architect audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). Phase 2b (audio, video, OCR, embedding bakeoff) is next.
+> **Current state (Phase 2b Done — Phase 2c next):** Phase 1 text + structured-data formats work end-to-end. Phase 2 (local BGE-base embeddings + hybrid BM25/vector/RRF search) shipped 2026-05-07. Phase 2b (audio via faster-whisper, video via ffmpeg, image OCR via EasyOCR, GPU worker queue, embedding bakeoff) shipped 2026-05-07 — 176 unit tests, 6 E2E tests, `ruff` clean. Bakeoff: **BGE-M3 +18.7% recall@1 vs BGE-base** on a pooled 9-chunk corpus. Architect audits closed for both. See [`docs/phase2-audit.md`](docs/phase2-audit.md), [`docs/phase2b-audit.md`](docs/phase2b-audit.md).
 
 ## What works today
 
@@ -25,9 +25,9 @@ and extracted spreadsheet rows from one database.
 |---|---|---|
 | Documents | PDF, DOCX, TXT, MD, HTML | ✅ Phase 1 |
 | Structured data | JSON, CSV, TSV, XLSX | ✅ Phase 1 |
-| Audio | MP3, WAV, M4A, FLAC, OGG | 🔧 Phase 2b |
-| Video | MP4, MOV, MKV, AVI, WEBM | 🔧 Phase 2b |
-| Images | JPEG, PNG, WEBP, TIFF | 🔧 Phase 2b |
+| Audio | MP3, WAV, M4A, FLAC, OGG, WebM | ✅ Phase 2b |
+| Video | MP4, MOV, MKV, AVI, WEBM, OGV | ✅ Phase 2b |
+| Images | JPEG, PNG, WEBP, TIFF, BMP, GIF | ✅ Phase 2b |
 | Office (presentations) | PPTX | 🗓 Phase 3+ |
 | Email | .eml, .msg | 🗓 Phase 3+ |
 | Archives | .zip, .tar | 🗓 Phase 3+ |
@@ -42,8 +42,8 @@ and extracted spreadsheet rows from one database.
 | Named entities | People, orgs, locations, dates | 🗓 Phase 3 |
 | Document summary | LLM-generated abstractive summary | 🗓 Phase 3 |
 | Sentiment / classification | Per-document and per-section scores | 🗓 Phase 3 |
-| Transcription | Audio/video speech-to-text via faster-whisper | 🔧 Phase 2b |
-| OCR | Scanned PDF and image text extraction | 🔧 Phase 2b |
+| Transcription | Audio/video speech-to-text via faster-whisper (`base` model, GPU/CPU) | ✅ Phase 2b |
+| OCR | Image text extraction via EasyOCR (English) | ✅ Phase 2b |
 | EXIF / codec metadata | File-level technical metadata | ✅ Phase 1 |
 
 ## Implementation roadmap
@@ -51,7 +51,8 @@ and extracted spreadsheet rows from one database.
 - [x] **Phase 0 — Skeleton**: FastAPI gateway, ARQ worker, PostgreSQL schema with pgvector, MinIO object store, Docker Compose, Alembic migrations, eval harness skeleton
 - [x] **Phase 1 — Text & structured formats**: PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers · structure-first chunker · document upload API · full pipeline loop (upload → extract → chunk → index)
 - [x] **Phase 2 — Embeddings + hybrid search**: local BGE-base-en-v1.5 (768-dim) via sentence-transformers · pgvector HNSW index · `POST /v1/search` with BM25, vector, and RRF hybrid modes · Redis cache for query embeddings · 126 unit tests · 6 E2E tests · 5/5 eval fixtures · `ruff` clean — *shipped, architect audit closed 2026-05-07 (see [`docs/phase2-audit.md`](docs/phase2-audit.md))*
-- [ ] **Phase 2b — Heavy formats**: GPU worker · faster-whisper (audio) · ffmpeg video pipeline · PaddleOCR (images) · embedding bakeoff (BGE-base vs BGE-M3 vs nomic-embed) on the gold set · backpressure + idempotency + DLQ
+- [x] **Phase 2b — Heavy formats**: GPU worker queue (`arq:gpu`, cost-class routing) · faster-whisper (audio: MP3/WAV/M4A/FLAC/OGG/WebM) · ffmpeg + faster-whisper video pipeline · EasyOCR (images: JPEG/PNG/WEBP/TIFF/BMP/GIF) · embedding bakeoff with pooled-corpus methodology (BGE-base vs BGE-M3 vs nomic-embed) — *shipped, BGE-M3 +18.7% recall@1; switching gated on larger corpus + DB migration. Architect audit closed 2026-05-07 (see [`docs/phase2b-audit.md`](docs/phase2b-audit.md))*
+- [ ] **Phase 2c — Robustness & multilingual**: blob streaming for >500 MB media · multilingual OCR · larger eval corpus (50+ chunks) · backpressure + idempotency + DLQ · automated regression tests for size guards
 - [ ] **Phase 3 — Enrichment**: LLM summarization · NER (spaCy + LLM-assisted) · routing policy engine (jsonlogic) · RAGChecker / ARES eval metrics wired in
 - [ ] **Phase 4 — Multi-tenant + auth**: API keys · JWT (RS256) · rate limiting · row-level security · per-tenant routing policies
 - [ ] **Phase 5 — Observability**: OpenTelemetry traces · Prometheus metrics · Grafana dashboards · Loki structured logs · Sentry exceptions
