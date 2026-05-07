@@ -6,7 +6,6 @@ Fallback to pypdf + pdfminer.six (BSD/MIT) if on-prem distribution requires it.
 from __future__ import annotations
 
 import io
-import uuid
 from typing import ClassVar
 
 import structlog
@@ -65,7 +64,7 @@ class PdfHandler:
 
                     if font_size > avg_font * 1.2 or (is_bold and font_size >= avg_font):
                         level = _size_to_level(font_size, avg_font)
-                        heading_stack = [(l, t) for l, t in heading_stack if l < level]
+                        heading_stack = [(lvl, t) for lvl, t in heading_stack if lvl < level]
                         heading_stack.append((level, line_text))
                         blk = Block(
                             kind="heading",

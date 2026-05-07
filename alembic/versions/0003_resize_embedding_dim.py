@@ -5,6 +5,7 @@ Revises: 0002
 Create Date: 2026-05-05
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0003"
@@ -14,6 +15,15 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    count = bind.execute(
+        sa.text("SELECT COUNT(*) FROM core.chunks WHERE embedding IS NOT NULL")
+    ).scalar()
+    if count and count > 0:
+        raise RuntimeError(
+            f"Migration 0003 would destroy {count} existing embeddings. "
+            "Run `UPDATE core.chunks SET embedding = NULL` first if intentional."
+        )
     # HNSW index must be dropped before column type change
     op.execute("DROP INDEX IF EXISTS core.idx_chunks_embedding")
     # Drop and re-add: pgvector has no direct resize cast

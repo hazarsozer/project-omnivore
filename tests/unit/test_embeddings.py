@@ -1,27 +1,47 @@
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from omnivore.pipeline.embeddings import (
-    EMBEDDING_DIM,
-    EMBEDDING_MODEL,
     _BATCH_SIZE,
+    EMBEDDING_DIM,
+    QUERY_PREFIX,
     _cache_key,
+    _decode_vec,
+    _encode_vec,
     embed_chunks,
     embed_texts,
 )
 
-# Convenience: a fake vector of the right dimension
-_VEC = [float(i) / EMBEDDING_DIM for i in range(EMBEDDING_DIM)]
+# Convenience: a fake vector of the right dimension.
+# Uses integers-as-floats so values survive float32 round-trip exactly.
+_VEC = [float(i % 128) for i in range(EMBEDDING_DIM)]
 
 
 def _patch_embed(return_vecs: list[list[float]] | None = None):
     """Patch the sync model call; default returns a single _VEC."""
     vecs = return_vecs if return_vecs is not None else [_VEC]
     return patch("omnivore.pipeline.embeddings._embed_sync", return_value=vecs)
+
+
+def _make_redis(cache_hit: bytes | None = None) -> tuple[AsyncMock, AsyncMock]:
+    """AsyncMock redis with pipeline support.
+
+    pipeline() is a SYNC call in the real redis client — use MagicMock so
+    `async with redis.pipeline(...) as pipe:` works correctly in tests.
+    """
+    redis = AsyncMock()
+    redis.get.return_value = cache_hit
+    # Pipeline commands (set, get, …) are sync in redis-py; only execute is awaitable.
+    mock_pipe = MagicMock()
+    mock_pipe.execute = AsyncMock(return_value=[])
+    pipeline_cm = MagicMock()
+    pipeline_cm.__aenter__ = AsyncMock(return_value=mock_pipe)
+    pipeline_cm.__aexit__ = AsyncMock(return_value=False)
+    redis.pipeline = MagicMock(return_value=pipeline_cm)
+    return redis, mock_pipe
 
 
 # ---------------------------------------------------------------------------
@@ -40,26 +60,25 @@ async def test_embed_texts_empty_returns_empty():
 
 
 async def test_embed_texts_all_cache_hits():
-    cached = [0.1] * EMBEDDING_DIM
-    redis = AsyncMock()
-    redis.get.return_value = json.dumps(cached).encode()
+    cached = [0.5] * EMBEDDING_DIM  # 0.5 is exact in float32
+    redis, _ = _make_redis(cache_hit=_encode_vec(cached))
 
     with _patch_embed() as mock_sync:
         result = await embed_texts(["hello"], redis)
 
     mock_sync.assert_not_called()
-    assert result == [cached]
+    assert result[0] == pytest.approx(cached, abs=1e-6)
 
 
 async def test_embed_texts_partial_cache_hit():
     """First text cached, second is a miss → model called with only the miss."""
-    cached_vec = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    cached_vec = [1.0] + [0.0] * (EMBEDDING_DIM - 1)  # exact in float32
     miss_vec = [0.0] * (EMBEDDING_DIM - 1) + [1.0]
 
     async def fake_get(key):
-        return json.dumps(cached_vec).encode() if key == _cache_key("cached") else None
+        return _encode_vec(cached_vec) if key == _cache_key("cached") else None
 
-    redis = AsyncMock()
+    redis, _ = _make_redis()
     redis.get.side_effect = fake_get
 
     with _patch_embed([miss_vec]) as mock_sync:
@@ -67,27 +86,27 @@ async def test_embed_texts_partial_cache_hit():
 
     called_with = mock_sync.call_args[0][0]
     assert called_with == ["miss"]
-    assert result[0] == cached_vec
+    assert result[0] == pytest.approx(cached_vec, abs=1e-5)
     assert result[1] == miss_vec
 
 
 # ---------------------------------------------------------------------------
-# Model call + cache write
+# Model call + cache write (pipeline)
 # ---------------------------------------------------------------------------
 
 
 async def test_embed_texts_calls_model_and_caches():
-    redis = AsyncMock()
-    redis.get.return_value = None
+    redis, mock_pipe = _make_redis()
 
     with _patch_embed([_VEC]):
         result = await embed_texts(["hello"], redis)
 
     assert result == [_VEC]
-    redis.set.assert_called_once()
-    key_arg, value_arg = redis.set.call_args[0]
+    redis.pipeline.assert_called_once()
+    mock_pipe.set.assert_called_once()
+    key_arg, value_arg = mock_pipe.set.call_args[0]
     assert key_arg == _cache_key("hello")
-    assert json.loads(value_arg) == _VEC
+    assert _decode_vec(value_arg) == pytest.approx(_VEC, abs=1e-4)
 
 
 async def test_embed_texts_no_redis_skips_cache():
@@ -104,15 +123,13 @@ async def test_embed_texts_no_redis_skips_cache():
 
 
 async def test_embed_texts_batches_large_input():
-    """Input larger than BATCH_SIZE must be processed by a single _embed_sync call
-    (batching is internal to sentence-transformers, not split at our level)."""
+    """Input larger than BATCH_SIZE must be processed in a single _embed_sync call."""
     n = _BATCH_SIZE + 5
-    vecs = [[float(i)] * EMBEDDING_DIM for i in range(n)]
+    vecs = [[float(i % 128)] * EMBEDDING_DIM for i in range(n)]
 
     with _patch_embed(vecs) as mock_sync:
         result = await embed_texts([f"t{i}" for i in range(n)])
 
-    # Our code passes all misses in one executor call; SentenceTransformer batches internally
     mock_sync.assert_called_once()
     assert len(result) == n
     assert result[0] == vecs[0]
@@ -129,7 +146,7 @@ async def test_embed_chunks_uses_chunk_content():
         def __init__(self, text: str):
             self.content = text
 
-    with _patch_embed([[0.1] * EMBEDDING_DIM, [0.2] * EMBEDDING_DIM]) as mock_sync:
+    with _patch_embed([[0.0] * EMBEDDING_DIM, [1.0] + [0.0] * (EMBEDDING_DIM - 1)]) as mock_sync:
         result = await embed_chunks([_FakeChunk("alpha"), _FakeChunk("beta")])  # type: ignore[arg-type]
 
     assert mock_sync.call_args[0][0] == ["alpha", "beta"]
@@ -137,7 +154,26 @@ async def test_embed_chunks_uses_chunk_content():
 
 
 # ---------------------------------------------------------------------------
-# Cache key stability
+# Query prefix
+# ---------------------------------------------------------------------------
+
+
+async def test_embed_texts_query_prefix_is_applied():
+    """When query_prefix is given, the prefixed text is what gets embedded and cached."""
+    prefix = "prefix: "
+    redis, mock_pipe = _make_redis()
+
+    with _patch_embed([_VEC]) as mock_sync:
+        result = await embed_texts(["hello"], redis, query_prefix=prefix)
+
+    assert result == [_VEC]
+    assert mock_sync.call_args[0][0] == [prefix + "hello"]
+    key_arg = mock_pipe.set.call_args[0][0]
+    assert key_arg == _cache_key(prefix + "hello")
+
+
+# ---------------------------------------------------------------------------
+# Cache key properties
 # ---------------------------------------------------------------------------
 
 
@@ -151,12 +187,31 @@ def test_cache_key_differs_by_content():
 
 def test_cache_key_format():
     key = _cache_key("test")
-    assert key.startswith("emb:v1:")
-    assert len(key) == len("emb:v1:") + 64  # sha256 hex digest
+    assert key.startswith("emb:v2:")
+    assert len(key) == len("emb:v2:") + 64  # sha256 hex digest
 
 
-def test_cache_key_includes_model_name():
-    # The key encodes the model, so changing EMBEDDING_MODEL constant would change keys.
-    # Verify model name is baked in by checking a known digest doesn't match a random string.
-    key = _cache_key("text")
-    assert EMBEDDING_MODEL in str(key) or len(key) == len("emb:v1:") + 64  # always 71 chars
+def test_cache_key_changes_with_model(monkeypatch):
+    original_key = _cache_key("text")
+    monkeypatch.setattr("omnivore.pipeline.embeddings.EMBEDDING_MODEL", "different/model")
+    assert _cache_key("text") != original_key
+
+
+def test_cache_key_differs_with_query_prefix():
+    """Query and passage embeddings for the same text must not share a cache entry."""
+    assert _cache_key(QUERY_PREFIX + "hello") != _cache_key("hello")
+
+
+# ---------------------------------------------------------------------------
+# Binary encode/decode round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_encode_decode_round_trip():
+    v = [float(i % 128) for i in range(EMBEDDING_DIM)]
+    assert _decode_vec(_encode_vec(v)) == pytest.approx(v, abs=1e-4)
+
+
+def test_encoded_size():
+    v = [0.0] * EMBEDDING_DIM
+    assert len(_encode_vec(v)) == EMBEDDING_DIM * 4  # 4 bytes per float32

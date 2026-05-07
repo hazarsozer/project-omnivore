@@ -10,7 +10,7 @@ class ErrorDetail(BaseModel):
     message: str
 
 
-class APIResponse(BaseModel, Generic[T]):
+class APIResponse(BaseModel, Generic[T]):  # noqa: UP046
     success: bool
     data: T | None = None
     error: ErrorDetail | None = None

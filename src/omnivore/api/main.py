@@ -7,8 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from omnivore.api.routes import health
-from omnivore.api.routes import documents, handlers_route, search
+from omnivore.api.routes import documents, handlers_route, health, search
 from omnivore.api.schemas import APIResponse, ErrorDetail
 from omnivore.config import get_settings
 from omnivore.logging_config import configure_logging

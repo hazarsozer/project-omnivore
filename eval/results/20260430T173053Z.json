@@ -1,0 +1,92 @@
+[
+  {
+    "fixture_id": "csv-001",
+    "handler": "csv",
+    "handler_version": "1.0.0",
+    "run_at": "2026-04-30T17:30:53.611901",
+    "metrics": {
+      "structural_accuracy": 1.0,
+      "fragment_count": 10,
+      "chunk_count": 1,
+      "table_count": 1,
+      "handler_matched": true,
+      "extraction_accuracy": null,
+      "chunk_faithfulness": null,
+      "retrieval_recall_at_10": null,
+      "ndcg_at_10": null
+    },
+    "errors": []
+  },
+  {
+    "fixture_id": "html-001",
+    "handler": "html",
+    "handler_version": "1.0.0",
+    "run_at": "2026-04-30T17:30:53.619595",
+    "metrics": {
+      "structural_accuracy": 1.0,
+      "fragment_count": 6,
+      "chunk_count": 3,
+      "table_count": 0,
+      "handler_matched": true,
+      "extraction_accuracy": null,
+      "chunk_faithfulness": null,
+      "retrieval_recall_at_10": null,
+      "ndcg_at_10": null
+    },
+    "errors": []
+  },
+  {
+    "fixture_id": "json-001",
+    "handler": "json",
+    "handler_version": "1.0.0",
+    "run_at": "2026-04-30T17:30:53.620025",
+    "metrics": {
+      "structural_accuracy": 1.0,
+      "fragment_count": 5,
+      "chunk_count": 1,
+      "table_count": 1,
+      "handler_matched": true,
+      "extraction_accuracy": null,
+      "chunk_faithfulness": null,
+      "retrieval_recall_at_10": null,
+      "ndcg_at_10": null
+    },
+    "errors": []
+  },
+  {
+    "fixture_id": "md-001",
+    "handler": "text",
+    "handler_version": "1.0.0",
+    "run_at": "2026-04-30T17:30:53.622336",
+    "metrics": {
+      "structural_accuracy": 0.6666666666666666,
+      "fragment_count": 13,
+      "chunk_count": 1,
+      "table_count": 0,
+      "handler_matched": false,
+      "extraction_accuracy": null,
+      "chunk_faithfulness": null,
+      "retrieval_recall_at_10": null,
+      "ndcg_at_10": null
+    },
+    "errors": []
+  },
+  {
+    "fixture_id": "txt-001",
+    "handler": "text",
+    "handler_version": "1.0.0",
+    "run_at": "2026-04-30T17:30:53.623148",
+    "metrics": {
+      "structural_accuracy": 1.0,
+      "fragment_count": 6,
+      "chunk_count": 1,
+      "table_count": 0,
+      "handler_matched": true,
+      "extraction_accuracy": null,
+      "chunk_faithfulness": null,
+      "retrieval_recall_at_10": null,
+      "ndcg_at_10": null
+    },
+    "errors": []
+  }
+]

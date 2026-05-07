@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 import aioboto3
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnivore.api.schemas import APIResponse
 from omnivore.config import get_settings
+from omnivore.constants import DEFAULT_TENANT_ID
 from omnivore.db.models import Document, Outbox
 from omnivore.db.session import get_db
 
@@ -32,7 +33,7 @@ async def upload_document(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
     settings = get_settings()
-    tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000001")  # Phase 4: real tenant from JWT
+    tenant_id = DEFAULT_TENANT_ID  # Phase 4: real tenant from JWT
 
     # Stream file in chunks: compute sha256 incrementally, sniff MIME from first 2 KB
     hasher = hashlib.sha256()
@@ -72,7 +73,7 @@ async def upload_document(
 
     document_id = uuid.uuid4()
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
-    storage_key = f"raw/{tenant_id}/{datetime.now(datetime.UTC).strftime('%Y/%m')}/{document_id}.{ext}"
+    storage_key = f"raw/{tenant_id}/{datetime.now(UTC).strftime('%Y/%m')}/{document_id}.{ext}"
 
     # Stream from Starlette's spooled temp file directly to MinIO — no full-file buffer in memory
     await file.seek(0)
@@ -127,7 +128,7 @@ async def upload_document(
     if pool:
         try:
             await pool.enqueue_job("ingest_dispatch", **job_kwargs)
-            outbox_entry.published_at = datetime.now(datetime.UTC)
+            outbox_entry.published_at = datetime.now(UTC)
             await db.commit()
         except Exception:
             logger.warning("arq.enqueue.failed_will_replay", document_id=str(document_id))
@@ -168,7 +169,7 @@ async def get_document(
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
             "indexed_at": doc.indexed_at.isoformat() if doc.indexed_at else None,
             "error": doc.error,
-            "metadata": doc.metadata,
+            "metadata": doc.doc_metadata,
         },
     )
 
@@ -180,7 +181,7 @@ async def list_documents(
     limit: int = Query(50, le=200),
     cursor: str | None = Query(None),
 ) -> APIResponse[list]:
-    tenant_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    tenant_id = DEFAULT_TENANT_ID
     stmt = select(Document).where(Document.tenant_id == tenant_id).order_by(Document.created_at.desc()).limit(limit)
     if status and status in _ALLOWED_STATUSES:
         stmt = stmt.where(Document.status == status)

@@ -1,29 +1,29 @@
 """Hybrid search endpoint — BM25 + vector (HNSW) + RRF merge."""
 from __future__ import annotations
 
+import hashlib
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from omnivore.api.schemas import APIResponse
+from omnivore.constants import DEFAULT_TENANT_ID
 from omnivore.db.session import AsyncSessionLocal
-from omnivore.pipeline.embeddings import embed_texts
+from omnivore.pipeline.embeddings import QUERY_PREFIX, embed_texts
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
-
-_HARDCODED_TENANT = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _RRF_K = 60
 
 
 class SearchRequest(BaseModel):
     query: str
-    mode: str = "hybrid"  # hybrid | bm25 | vector
-    top_k: int = 20
+    mode: Literal["bm25", "vector", "hybrid"] = "hybrid"
+    top_k: int = Field(20, ge=1, le=200)
 
 
 class SearchResult(BaseModel):
@@ -37,12 +37,12 @@ class SearchResult(BaseModel):
 
 @router.post("")
 async def search(request: Request, body: SearchRequest) -> APIResponse[list[SearchResult]]:
-    tenant_id = _HARDCODED_TENANT
+    tenant_id = DEFAULT_TENANT_ID
 
     query_vector: list[float] | None = None
     if body.mode in ("hybrid", "vector"):
         redis = getattr(request.app.state, "arq_pool", None)
-        query_vector = (await embed_texts([body.query], redis))[0]
+        query_vector = (await embed_texts([body.query], redis, query_prefix=QUERY_PREFIX))[0]
 
     async with AsyncSessionLocal() as db:
         if body.mode == "bm25":
@@ -64,7 +64,8 @@ async def search(request: Request, body: SearchRequest) -> APIResponse[list[Sear
         for r in rows
     ]
 
-    logger.info("search.complete", query=body.query[:80], mode=body.mode, results=len(results))
+    query_hash = hashlib.sha256(body.query.encode()).hexdigest()[:12]
+    logger.info("search.complete", query_hash=query_hash, mode=body.mode, results=len(results))
     return APIResponse(success=True, data=results)
 
 
@@ -154,7 +155,7 @@ async def _hybrid_search(
             r.rrf_score::float AS score
         FROM rrf r
         JOIN core.chunks c ON c.id = r.id
-        ORDER BY r.rrf_score DESC
+        ORDER BY r.rrf_score DESC, c.id
         LIMIT :top_k
     """)
     result = await db.execute(sql, {

@@ -6,7 +6,7 @@ from typing import Any
 
 import tiktoken
 
-from omnivore.pipeline.models import Chunk, ExtractionResult, Fragment, PagePosition
+from omnivore.pipeline.models import Chunk, ExtractionResult, Fragment
 
 _ENC = tiktoken.get_encoding("cl100k_base")
 DEFAULT_MAX_TOKENS = 512

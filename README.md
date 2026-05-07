@@ -2,7 +2,7 @@
 
 A Postgres-native document ingestion pipeline for RAG systems. Upload text documents and structured data — PDF, DOCX, spreadsheets, HTML, JSON — and get back structured intelligence stored directly in PostgreSQL: chunked text with full lineage, extracted tables queryable as SQL, and rich metadata. No separate vector database required.
 
-> **Current state (Phase 1 complete):** Text and structured-data formats work end-to-end — upload → extract → chunk → persist. Audio, video, OCR, embeddings, and search are planned for Phase 2+. See the roadmap below.
+> **Current state (Phase 2 Done — Phase 2b next):** Phase 1 text + structured-data formats work end-to-end. Phase 2 (local BGE-base embeddings + hybrid BM25/vector/RRF search) is shipped — 125 unit tests, 6 E2E tests, 5/5 eval fixtures PASS, `ruff check src/ tests/` clean. Architect audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). Phase 2b (audio, video, OCR, embedding bakeoff) is next.
 
 ## What works today
 
@@ -25,9 +25,9 @@ and extracted spreadsheet rows from one database.
 |---|---|---|
 | Documents | PDF, DOCX, TXT, MD, HTML | ✅ Phase 1 |
 | Structured data | JSON, CSV, TSV, XLSX | ✅ Phase 1 |
-| Audio | MP3, WAV, M4A, FLAC, OGG | 🔧 Phase 2 |
-| Video | MP4, MOV, MKV, AVI, WEBM | 🔧 Phase 2 |
-| Images | JPEG, PNG, WEBP, TIFF | 🔧 Phase 2 |
+| Audio | MP3, WAV, M4A, FLAC, OGG | 🔧 Phase 2b |
+| Video | MP4, MOV, MKV, AVI, WEBM | 🔧 Phase 2b |
+| Images | JPEG, PNG, WEBP, TIFF | 🔧 Phase 2b |
 | Office (presentations) | PPTX | 🗓 Phase 3+ |
 | Email | .eml, .msg | 🗓 Phase 3+ |
 | Archives | .zip, .tar | 🗓 Phase 3+ |
@@ -36,21 +36,23 @@ and extracted spreadsheet rows from one database.
 
 | Signal | Description | Status |
 |---|---|---|
-| Text chunks + embeddings | Semantically chunked content with dense vectors for RAG | 🔧 Phase 2 (embedding bakeoff) |
+| Text chunks + embeddings | Structure-first chunking + 768-dim BGE-base-en-v1.5 vectors in pgvector | ✅ Phase 2 |
+| Hybrid search | BM25 + vector + RRF merge over `/v1/search` | ✅ Phase 2 |
 | Structured tables | Rows from CSV, XLSX, PDF tables, JSON arrays | ✅ Phase 1 |
 | Named entities | People, orgs, locations, dates | 🗓 Phase 3 |
 | Document summary | LLM-generated abstractive summary | 🗓 Phase 3 |
 | Sentiment / classification | Per-document and per-section scores | 🗓 Phase 3 |
-| Transcription | Audio/video speech-to-text via faster-whisper | 🔧 Phase 2 |
-| OCR | Scanned PDF and image text extraction | 🔧 Phase 2 |
+| Transcription | Audio/video speech-to-text via faster-whisper | 🔧 Phase 2b |
+| OCR | Scanned PDF and image text extraction | 🔧 Phase 2b |
 | EXIF / codec metadata | File-level technical metadata | ✅ Phase 1 |
 
 ## Implementation roadmap
 
 - [x] **Phase 0 — Skeleton**: FastAPI gateway, ARQ worker, PostgreSQL schema with pgvector, MinIO object store, Docker Compose, Alembic migrations, eval harness skeleton
 - [x] **Phase 1 — Text & structured formats**: PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers · structure-first chunker · document upload API · full pipeline loop (upload → extract → chunk → index)
-- [ ] **Phase 2 — Heavy formats + embedding bakeoff**: GPU worker · faster-whisper (audio) · ffmpeg video pipeline · PaddleOCR (images) · embedding model bakeoff (`text-embedding-3-small` vs BGE-M3 vs jina-v3) · backpressure + idempotency + DLQ
-- [ ] **Phase 3 — Enrichment + search**: LLM summarization · NER (spaCy + LLM-assisted) · routing policy engine (jsonlogic) · hybrid search (BM25 + vector + RRF) · RAGChecker / ARES eval metrics wired in
+- [x] **Phase 2 — Embeddings + hybrid search**: local BGE-base-en-v1.5 (768-dim) via sentence-transformers · pgvector HNSW index · `POST /v1/search` with BM25, vector, and RRF hybrid modes · Redis cache for query embeddings · 126 unit tests · 6 E2E tests · 5/5 eval fixtures · `ruff` clean — *shipped, architect audit closed 2026-05-07 (see [`docs/phase2-audit.md`](docs/phase2-audit.md))*
+- [ ] **Phase 2b — Heavy formats**: GPU worker · faster-whisper (audio) · ffmpeg video pipeline · PaddleOCR (images) · embedding bakeoff (BGE-base vs BGE-M3 vs nomic-embed) on the gold set · backpressure + idempotency + DLQ
+- [ ] **Phase 3 — Enrichment**: LLM summarization · NER (spaCy + LLM-assisted) · routing policy engine (jsonlogic) · RAGChecker / ARES eval metrics wired in
 - [ ] **Phase 4 — Multi-tenant + auth**: API keys · JWT (RS256) · rate limiting · row-level security · per-tenant routing policies
 - [ ] **Phase 5 — Observability**: OpenTelemetry traces · Prometheus metrics · Grafana dashboards · Loki structured logs · Sentry exceptions
 - [ ] **Phase 6 — Hardening**: Chaos tests · DB partitioning (chunks by tenant) · cost dashboards · compliance groundwork
@@ -71,13 +73,13 @@ uv sync
 cp .env.example .env
 
 docker compose up -d postgres redis minio
-alembic upgrade head
+uv run alembic upgrade head
 
 # API (with live reload)
-uvicorn omnivore.api.main:app --reload
+uv run uvicorn omnivore.api.main:app --reload
 
-# Worker (separate terminal)
-python -m omnivore.worker.main
+# Worker (separate terminal — first start downloads BGE-base ~440 MB)
+uv run python -m omnivore.worker.main
 ```
 
 **Upload a file:**
@@ -88,6 +90,14 @@ curl -X POST http://localhost:8000/v1/documents \
 
 curl http://localhost:8000/v1/documents/{document_id}
 # → {"success": true, "data": {"status": "indexed", "chunks": 42, ...}}
+```
+
+**Search (Phase 2):**
+```bash
+curl -X POST http://localhost:8000/v1/search \
+     -H "Content-Type: application/json" \
+     -d '{"query": "document ingestion pipeline", "mode": "hybrid", "top_k": 5}'
+# → {"success": true, "data": [{"chunk_id": "...", "content": "...", "score": 0.0312, ...}, ...]}
 ```
 
 **Explore the API:** `http://localhost:8000/docs`

@@ -77,7 +77,7 @@ class MarkdownHandler:
                 level = int(tok.tag[1])  # h1 -> 1
                 inline = tokens[i + 1] if i + 1 < len(tokens) else None
                 heading_text = inline.content if inline else ""
-                heading_stack = [(l, t) for l, t in heading_stack if l < level]
+                heading_stack = [(lvl, t) for lvl, t in heading_stack if lvl < level]
                 heading_stack.append((level, heading_text))
                 blk = Block(kind="heading", level=level, reading_order=reading_order, text=heading_text)
                 result.blocks.append(blk)

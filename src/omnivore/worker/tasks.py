@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import select
@@ -75,29 +75,27 @@ async def ingest_dispatch(
 
         chunks = chunk_result(result, t_id)
 
-        # Embed chunks locally (BGE-base, no external API)
-        vectors = await embed_chunks(chunks, redis=ctx.get("redis"))
-
-        # Persist chunks
-        for chunk, vector in zip(chunks, vectors):
-            db.add(
-                ChunkRow(
-                    document_id=chunk.document_id,
-                    tenant_id=chunk.tenant_id,
-                    ordinal=chunk.ordinal,
-                    kind=chunk.kind,
-                    content=chunk.content,
-                    token_count=chunk.token_count,
-                    position=chunk.position,
-                    heading_path=chunk.heading_path,
-                    source_block_ids=chunk.source_block_ids,
-                    table_lineage=chunk.table_lineage,
-                    language=chunk.language,
-                    confidence=chunk.confidence,
-                    embedding=vector,
-                    embedding_model=EMBEDDING_MODEL,
-                )
+        # Persist chunks without embeddings first — embedding failure won't lose chunks
+        chunk_rows: list[ChunkRow] = []
+        for chunk in chunks:
+            row = ChunkRow(
+                document_id=chunk.document_id,
+                tenant_id=chunk.tenant_id,
+                ordinal=chunk.ordinal,
+                kind=chunk.kind,
+                content=chunk.content,
+                token_count=chunk.token_count,
+                position=chunk.position,
+                heading_path=chunk.heading_path,
+                source_block_ids=chunk.source_block_ids,
+                table_lineage=chunk.table_lineage,
+                language=chunk.language,
+                confidence=chunk.confidence,
+                embedding=None,
+                embedding_model=None,
             )
+            db.add(row)
+            chunk_rows.append(row)
 
         # Persist structured tables
         for table in result.tables:
@@ -114,9 +112,23 @@ async def ingest_dispatch(
                 db.add(ExtractedRow(table_id=et.id, ordinal=i, data=row))
 
         doc.status = "indexed"
-        doc.indexed_at = datetime.now(datetime.UTC)
-        doc.metadata = result.metadata
+        doc.indexed_at = datetime.now(UTC)
+        doc.doc_metadata = {**doc.doc_metadata, **result.metadata}
         await db.commit()
+
+        # Embed and back-fill — recoverable failure: chunks are already indexed via BM25
+        try:
+            vectors = await embed_chunks(chunks, redis=ctx.get("redis"))
+            for chunk_row, vector in zip(chunk_rows, vectors):
+                chunk_row.embedding = vector
+                chunk_row.embedding_model = EMBEDDING_MODEL
+            await db.commit()
+        except Exception:
+            logger.warning(
+                "embeddings.failed_chunks_indexed_without_vectors",
+                document_id=document_id,
+                chunks=len(chunk_rows),
+            )
 
     logger.info(
         "ingest.dispatch.complete",
@@ -153,7 +165,7 @@ async def outbox_relay(ctx: dict) -> dict:
             kwargs = row.payload.get("kwargs", {})
             try:
                 await redis.enqueue_job(task, **kwargs)
-                row.published_at = datetime.now(datetime.UTC)
+                row.published_at = datetime.now(UTC)
                 published += 1
             except Exception:
                 logger.warning("outbox_relay.enqueue_failed", outbox_id=row.id)
@@ -167,6 +179,8 @@ async def outbox_relay(ctx: dict) -> dict:
 async def on_startup(ctx: dict) -> None:
     get_settings()  # warm the lru_cache singleton
     registry.discover()
+    from omnivore.pipeline.embeddings import _get_model
+    _get_model()  # download ~440 MB BGE-base at boot, not on the first job
     logger.info("worker.startup", handlers=len(registry.all_handlers()))
 
 

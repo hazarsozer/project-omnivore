@@ -47,7 +47,7 @@ class DocxHandler:
             heading_level = _HEADING_STYLES.get(style_name)
 
             if heading_level is not None:
-                heading_stack = [(l, t) for l, t in heading_stack if l < heading_level]
+                heading_stack = [(lvl, t) for lvl, t in heading_stack if lvl < heading_level]
                 heading_stack.append((heading_level, text))
                 blk = Block(
                     kind="heading",

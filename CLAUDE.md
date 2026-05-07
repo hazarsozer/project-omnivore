@@ -106,18 +106,20 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 
 ---
 
-## What is NOT in Phase 1 (don't build it yet)
+## What is NOT in scope yet (don't build it ahead of its phase)
 
-- Audio/video handlers (`faster-whisper`, `ffmpeg`) — Phase 2
-- Image OCR (PaddleOCR) — Phase 2
-- Embeddings (OpenAI / BGE-M3) — Phase 2 (bakeoff first)
+- Audio/video handlers (`faster-whisper`, `ffmpeg`) — Phase 2b
+- Image OCR (PaddleOCR) — Phase 2b
+- Embedding bakeoff (BGE-base vs BGE-M3 vs nomic-embed) — Phase 2b (after Phase 2 audit closes)
+- Recall@10 baselining — Phase 2b. Requires retrieval gold-set fixtures with query/relevance judgment pairs and a `LiveMetricsEvaluator`. See `eval/results/README.md` for the plan. Do not wire retrieval metrics into the harness before Phase 2b begins.
 - LLM summarization, NER, sentiment — Phase 3
 - Routing policy engine (jsonlogic) — Phase 3
-- Real hybrid search (BM25 + vector + RRF) — Phase 3
 - Multi-tenant auth (JWT, API keys, RLS) — Phase 4
-- Docling PDF pilot — Phase 1+ (behind feature flag, not default)
-- ColPali / visual retrieval — deferred (trigger: recall@10 gap > 15%)
-- RAPTOR / GraphRAG — deferred (trigger: > 20% multi-hop queries)
+- Docling PDF pilot — gated behind a feature flag, never the default
+- ColPali / visual retrieval — deferred (trigger: recall@10 gap > 15 %)
+- RAPTOR / GraphRAG — deferred (trigger: > 20 % multi-hop queries)
+
+Note: hybrid search (BM25 + pgvector + RRF) was pulled into Phase 2 alongside embeddings. The Phase 3 enrichment scope (LLM, NER, routing) is unchanged.
 
 If you find yourself reaching for one of these before the phase is ready, stop and check with the team.
 
@@ -178,14 +180,15 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 1 complete)
+## Phase roadmap (current: Phase 2b — heavy formats)
 
 | Phase | What | Status |
 |---|---|---|
 | 0 — Skeleton | FastAPI, ARQ, Postgres schema, eval harness | Done |
 | 1 — Text formats | PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers + chunker + upload API | Done |
-| 2 — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR, embedding bakeoff | Next |
-| 3 — Enrichment | LLM summary, NER, routing policy, hybrid search | — |
+| 2 — Embeddings + hybrid search | BGE-base-en-v1.5 (local) + pgvector + BM25/vector/RRF endpoint | **Done** — 125 unit tests, 6 E2E tests, 5/5 eval fixtures. Audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). |
+| 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR, embedding bakeoff | Next |
+| 3 — Enrichment | LLM summary, NER, routing policy | — |
 | 4 — Multi-tenant | API keys, JWT, rate limiting, RLS | — |
 | 5 — Observability | OTel, Prometheus, Grafana, Loki | — |
 | 6 — Hardening | Chaos tests, DB partitioning, cost dashboards | Ongoing |

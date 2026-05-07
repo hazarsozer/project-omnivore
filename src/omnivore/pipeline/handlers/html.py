@@ -59,7 +59,7 @@ class HtmlHandler:
 
             if tag in _HEADING_TAGS:
                 level = int(tag[1])
-                heading_stack = [(l, t) for l, t in heading_stack if l < level]
+                heading_stack = [(lvl, t) for lvl, t in heading_stack if lvl < level]
                 heading_stack.append((level, text))
                 blk = Block(kind="heading", level=level, reading_order=reading_order, text=text)
                 result.blocks.append(blk)

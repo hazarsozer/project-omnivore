@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from omnivore.db.session import Base
 
 
-class Tenant(Base):
+class Tenant(Base):  # noqa: F401  (imported by E2E test)
     __tablename__ = "tenants"
     __table_args__ = {"schema": "core"}
 
@@ -59,7 +59,7 @@ class Document(Base):
     handler_version: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[dict | None] = mapped_column(JSONB)
-    metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    doc_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     routing_decision: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default="now()")
     indexed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
@@ -112,7 +112,7 @@ class Entity(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     normalized: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    meta: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
 
 class ExtractedTable(Base):
