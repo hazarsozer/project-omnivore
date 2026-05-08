@@ -133,7 +133,7 @@ These are documented in `docs/architecture.md §9`. The most load-bearing ones:
 - **Q16** — Eval gold-set ownership: engineering owns it, versioned under `eval/fixtures/`.
 - **Q17** — Image OCR backend: PaddleOCR 3.x rejected — ONEDNN/PIR executor incompatibility on consumer Intel/AMD CPUs (2026-05). **EasyOCR (Apache 2.0, PyTorch-based) is the current default.** Re-evaluate PaddleOCR when they release a PIR-stable CPU wheel.
 - **Q18** — **Resolved (2026-05-08).** `IngestContext.stream_blob() → AsyncIterator[bytes]` implemented in `pipeline/context.py`. Audio and video handlers now stream to temp file instead of buffering the full blob. `MAX_GPU_INPUT_BYTES` guard removed from both handlers. `_DiskCtx` in `eval/runner.py` updated with a chunked local implementation.
-- **Q19** — **BGE-M3 switch BLOCKED (2026-05-08 decision).** Phase 2c expanded the corpus to 53 chunks (7 fixtures, 39 queries). BGE-M3 does not clear the ≥10% recall@1 threshold: BGE-base leads recall@1 (0.361 vs 0.332, BGE-M3 is −8%). BGE-M3 edges on nDCG@3 (+5.1%) and recall@3 (+7.6%) but neither clears the bar. The 9-chunk result (+18.7%) was a statistical artifact. **BGE-base-en-v1.5 (768-dim) remains the production model. Do not plan the vector(768)→vector(1024) migration.** Re-evaluate if a qualitatively different retrieval failure pattern emerges in production. See `eval/results/README.md` for full results.
+- **Q19** — **BGE-M3 switch BLOCKED (2026-05-08 decision).** Phase 2c expanded the corpus to 53 chunks (7 fixtures, 39 queries). Paired t-test on recall@1: t = +0.514 (bge-base: 0.361, bge-m3: 0.332), nDCG@3: t = +0.880 — **neither metric is statistically significant at p<0.05** (would require |t| > 2.024). Truthful conclusion: **the two models are statistically indistinguishable on this corpus.** The 9-chunk +18.7% advantage was sampling noise; the 53-chunk result confirms there is no measurable retrieval-quality benefit to BGE-M3 that would justify the destructive vector(768)→vector(1024) + HNSW rebuild. **BGE-base-en-v1.5 (768-dim) remains the production model.** Re-evaluate if a qualitatively different retrieval failure pattern emerges in production (e.g., multilingual queries where BGE-M3's broader training would matter). See `eval/results/README.md` for full results.
 
 ---
 
@@ -181,7 +181,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 2b — heavy formats)
+## Phase roadmap (current: Phase 2c — robustness & multilingual)
 
 | Phase | What | Status |
 |---|---|---|
@@ -189,6 +189,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 1 — Text formats | PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers + chunker + upload API | Done |
 | 2 — Embeddings + hybrid search | BGE-base-en-v1.5 (local) + pgvector + BM25/vector/RRF endpoint | **Done** — 125 unit tests, 6 E2E tests, 5/5 eval fixtures. Audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). |
 | 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR (EasyOCR), GPU worker queue, embedding bakeoff | **Done** — 176 unit tests, 6 E2E. Bakeoff: BGE-M3 +18.7% recall@1 vs BGE-base. Audit closed 2026-05-07. See [`docs/phase2b-audit.md`](docs/phase2b-audit.md). |
+| 2c — Robustness & multilingual | `IngestContext.stream_blob()`, multilingual OCR (per-request lang override + LRU-bounded reader cache + allowlist), expanded eval corpus (53 chunks / 39 queries), backpressure (HTTP 429), idempotency guard, DLQ retry payload, queue-name alignment fix | **Done** — 164 unit tests, 6 E2E. Bakeoff verdict: bge-base ≈ bge-m3 (not significant, t=0.514). Pre-existing CPU queue-name mismatch fixed. Audit closed 2026-05-08. |
 | 3 — Enrichment | LLM summary, NER, routing policy | — |
 | 4 — Multi-tenant | API keys, JWT, rate limiting, RLS | — |
 | 5 — Observability | OTel, Prometheus, Grafana, Loki | — |

@@ -62,6 +62,7 @@ def _make_request(arq_pool=None, queue_depth: int = 0) -> MagicMock:
     req.app.state = MagicMock()
     if arq_pool is not None:
         arq_pool.zcard = AsyncMock(return_value=queue_depth)
+        arq_pool.default_queue_name = "arq:queue"
     req.app.state.arq_pool = arq_pool
     return req
 

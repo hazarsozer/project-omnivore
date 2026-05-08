@@ -72,9 +72,11 @@ async def upload_document(
         )
 
     # Backpressure: reject new uploads when the CPU queue is over the depth limit.
+    # Read the queue name from the pool itself so this stays in sync with the worker
+    # (the worker's WorkerSettings.queue_name must match pool.default_queue_name).
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
-        queue_depth = await pool.zcard("arq:queue")
+        queue_depth = await pool.zcard(pool.default_queue_name)
         if queue_depth >= settings.MAX_QUEUE_DEPTH:
             raise HTTPException(
                 status_code=429,

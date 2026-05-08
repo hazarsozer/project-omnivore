@@ -180,6 +180,49 @@ async def test_image_ocr_respects_per_request_language_override():
     assert captured == [("fr", "de")]
 
 
+async def test_image_ocr_rejects_unsupported_language_codes():
+    """Unsupported lang codes from ctx.config raise rather than loading a reader."""
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="Unsupported OCR languages"):
+        await ImageOcrHandler().extract(
+            _make_blob(),
+            _make_ctx(ocr_languages=["en", "../../etc/passwd"]),
+        )
+
+
+def test_image_ocr_reader_cache_evicts_when_full():
+    """Cache evicts the oldest reader once _MAX_CACHED_READERS is reached."""
+    from omnivore.pipeline.handlers import image as image_mod
+
+    # Reset cache for this test
+    ImageOcrHandler._readers.clear()
+    fake_readers: list[MagicMock] = []
+
+    def _fake_reader_ctor(langs, gpu, verbose):
+        m = MagicMock()
+        m.langs = langs
+        fake_readers.append(m)
+        return m
+
+    fake_easyocr = MagicMock()
+    fake_easyocr.Reader = _fake_reader_ctor
+
+    fake_torch = MagicMock(cuda=MagicMock(is_available=lambda: False))
+    with patch.dict("sys.modules", {"easyocr": fake_easyocr, "torch": fake_torch}):
+        # Load _MAX_CACHED_READERS distinct readers
+        for langs in [("en",), ("fr",), ("de",), ("es",)]:
+            ImageOcrHandler._get_reader(langs)
+        assert len(ImageOcrHandler._readers) == image_mod._MAX_CACHED_READERS
+
+        # Loading one more must evict the oldest ("en",)
+        ImageOcrHandler._get_reader(("ja",))
+        assert ("en",) not in ImageOcrHandler._readers
+        assert ("ja",) in ImageOcrHandler._readers
+        assert len(ImageOcrHandler._readers) == image_mod._MAX_CACHED_READERS
+
+    ImageOcrHandler._readers.clear()
+
+
 # ---------------------------------------------------------------------------
 # Protocol compliance
 # ---------------------------------------------------------------------------

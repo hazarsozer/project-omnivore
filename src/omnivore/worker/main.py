@@ -14,7 +14,9 @@ class WorkerSettings:
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().REDIS_URL)
-    queue_name = "arq:default"
+    # Must match the ArqRedis default (`arq:queue`) used by the API pool, which enqueues
+    # without an explicit `_queue_name`. Mismatch was a silent bug from Phase 0 — fixed 2026-05-08.
+    queue_name = "arq:queue"
     max_jobs = 10
     job_timeout = 3600
     keep_result = 86400

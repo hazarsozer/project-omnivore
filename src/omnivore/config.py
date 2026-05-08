@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_SIZE_BYTES: int = 2_147_483_648
-    MAX_GPU_INPUT_BYTES: int = 524_288_000  # 500 MB — retained for reference; handlers now stream
     IMAGE_OCR_LANGUAGES: list[str] = ["en"]  # default language list for EasyOCR
     MAX_QUEUE_DEPTH: int = 100  # reject new uploads (HTTP 429) when CPU queue exceeds this
 

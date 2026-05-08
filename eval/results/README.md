@@ -53,19 +53,48 @@ systems patterns, and ML engineering — 39 queries total.
 | BGE-M3 | 0.332 | **0.6997** | **0.7436** | **0.762** |
 | nomic-embed-text-v1.5 | 0.312 | 0.5947 | 0.6667 | 0.6577 |
 
-### Key finding: BGE-M3 switch is BLOCKED
+### Statistical significance (paired t-test, N=39)
 
-- **recall@1**: BGE-base leads (0.361 > 0.332, BGE-M3 is −8.0%)
-- **recall@3**: BGE-M3 leads by +7.6% (below 10% threshold)
-- **nDCG@1**: BGE-M3 leads by +3.6% (below 10% threshold)
-- **nDCG@3**: BGE-M3 leads by +5.1% (below 10% threshold)
+| Comparison | Mean diff | SD | t-stat | Significant at p<0.05? |
+|------------|-----------|----|--------|------------------------|
+| bge-base − bge-m3 (recall@1) | +0.0291 | 0.353 | +0.514 | **No** (\|t\|>2.024 needed) |
+| bge-m3 − bge-base (nDCG@3) | +0.0373 | 0.265 | +0.880 | **No** |
 
-**BGE-M3 does not clear the 10% recall@1 threshold on the 53-chunk corpus.** The
-9-chunk result (+18.7%) was a statistical artifact of an under-constrained evaluation.
-The destructive DB migration is NOT justified. BGE-base-en-v1.5 (768-dim) remains
-the production embedding model. Decision logged in `CLAUDE.md §Q19`.
+### Key finding: BGE-M3 and BGE-base are statistically indistinguishable
 
-**nomic-embed:** Consistently underperforms both alternatives. Not viable.
+Despite the small mean differences (bge-base +0.029 on recall@1, bge-m3 +0.037 on
+nDCG@3), **neither difference is statistically significant** on the 39-query corpus.
+The 9-chunk +18.7% recall@1 advantage for BGE-M3 was sampling noise; expanding the
+corpus erased it.
+
+**Decision: do not migrate.** A destructive vector(768)→vector(1024) + HNSW rebuild
+without a measurable retrieval-quality win is unjustified. BGE-base-en-v1.5 (768-dim)
+remains the production embedding model. See `CLAUDE.md §Q19`.
+
+**nomic-embed:** Consistently trails both BGE variants on every metric — eliminated
+from consideration.
+
+### Caveats and known fixture issues
+
+- The query "How does PostgreSQL ensure data is not lost on a crash?" (md-003) scores
+  r@1=0, r@3=0 for ALL three models. The chunker merged the WAL/Durability section
+  into a chunk dominated by PgBouncer content, so its embedding doesn't surface for
+  durability queries. This is a chunker-boundary issue, not an embedding limit.
+- "How do I get started with the project?" (txt-001) similarly scores 0/0 for all
+  three. The text handler produces a single chunk for the whole txt-001 fixture
+  (only 1 chunk total), so there's no discriminative ranking possible.
+- These cases drag mean recall down equally for all candidates and shrink the signal
+  available to distinguish models.
+
+### When to re-evaluate
+
+The 39-query corpus is English-only and skews toward technical documentation. BGE-M3's
+published edge comes from multilingual training and instruction-tuned retrieval —
+neither of which our queries probe. Re-run the bakeoff if:
+
+- Multilingual ingestion ships and we need a model that handles non-English queries.
+- A retrieval failure pattern emerges in production that we suspect is embedding-bound.
+- A cheaper/smaller model appears that might match BGE-base.
 
 ---
 

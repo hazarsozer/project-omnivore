@@ -27,6 +27,18 @@ _ACCEPTED_MIMES: tuple[str, ...] = (
 
 _model_lock = threading.Lock()
 
+# EasyOCR's well-known language codes. Restricting to this allowlist prevents cache
+# pollution / VRAM exhaustion via attacker-controlled `ocr_languages` from ctx.config.
+_SUPPORTED_OCR_LANGUAGES: frozenset[str] = frozenset({
+    "en", "ch_sim", "ch_tra", "ja", "ko", "th", "vi",
+    "fr", "de", "es", "it", "pt", "nl", "ru", "uk", "pl", "tr", "ar", "fa", "ur", "hi",
+    "id", "ms", "tl", "sv", "no", "da", "fi", "cs", "sk", "ro", "hu", "el", "he",
+})
+
+# LRU-style bound on cached readers so a misbehaving caller cannot exhaust GPU VRAM
+# by submitting many distinct language combinations. ~200 MB per reader.
+_MAX_CACHED_READERS = 4
+
 
 class ImageOcrHandler:
     name: ClassVar[str] = "image-ocr"
@@ -46,14 +58,26 @@ class ImageOcrHandler:
                     import easyocr as _easyocr
                     import torch
 
+                    if len(cls._readers) >= _MAX_CACHED_READERS:
+                        # Evict the oldest insertion (Python 3.7+ dicts preserve insertion order).
+                        evict_key = next(iter(cls._readers))
+                        cls._readers.pop(evict_key)
+                        logger.info("image_ocr.reader_evicted", languages=list(evict_key))
+
                     gpu = torch.cuda.is_available()
                     cls._readers[languages] = _easyocr.Reader(list(languages), gpu=gpu, verbose=False)
                     logger.info("image_ocr.model.loaded", gpu=gpu, languages=list(languages))
         return cls._readers[languages]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
-        lang_override = ctx.config.get("ocr_languages") if isinstance(ctx.config, dict) else None
-        languages = tuple(lang_override) if lang_override else tuple(get_settings().IMAGE_OCR_LANGUAGES)
+        lang_override = ctx.config.get("ocr_languages")
+        if lang_override:
+            invalid = [lc for lc in lang_override if lc not in _SUPPORTED_OCR_LANGUAGES]
+            if invalid:
+                raise ValueError(f"Unsupported OCR languages: {invalid}")
+            languages = tuple(lang_override)
+        else:
+            languages = tuple(get_settings().IMAGE_OCR_LANGUAGES)
 
         data = await ctx.read_blob()
 
