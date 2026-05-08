@@ -130,3 +130,22 @@ zero direct coverage.
 - **Phase roadmap** reflects reality
 
 Phase 2c is **CLOSED**.
+
+---
+
+## Follow-up work (prioritized)
+
+These were identified during the audit but deferred. Take them in order at the start
+of the next phase.
+
+| # | Priority | Item | Rationale |
+|---|----------|------|-----------|
+| 1 | **P0** | End-to-end pipeline test (`upload → ARQ → worker → search`) against real Redis + Postgres + MinIO | The C1 queue-name bug survived three "Done" phases because nothing exercised this path. Even one happy-path test would have caught it. Without this, the next wiring bug lives just as long. |
+| 2 | **P1** | Integration test for `IngestContext.stream_blob()` against real MinIO | The headline Phase 2c feature has zero direct coverage. Unit tests mock the stream boundary; `_DiskCtx.stream_blob` is fake streaming. If `iter_chunks` has any EOF semantic we didn't expect, audio/video silently produce empty temp files. |
+| 3 | **P1** | `POST /v1/documents/{id}/retry` endpoint | `doc.error.retry_payload` is stored but unreachable without manual SQL. The DLQ feature is half-built without a way to drain it. |
+| 4 | **P2** | GPU queue backpressure | `arq:gpu` is unmonitored. At `max_jobs=2`, 100 queued GPU jobs ≈ 50 min of latency before the user sees anything. Mirror the CPU `MAX_QUEUE_DEPTH` check, separate threshold. |
+| 5 | **P2** | Stronger idempotency for in-progress states | Current guard only catches `(indexed, failed)`. In-progress states (`extracting`, `enriching`, `routing`) can still race on outbox-relay republish. Add a `started_at` lease/heartbeat or a `processing` lock row. |
+| 6 | **P3** | Bakeoff fixture cleanup | "How does PostgreSQL ensure data is not lost on a crash?" scores 0/0 for all 3 models because the chunker collapsed the WAL section into the PgBouncer chunk. `txt-001` produces 1 chunk with no discriminative power. Either rewrite the offenders or drop them from the bakeoff. |
+
+P0 + P1 should land before any new feature work — they close real correctness gaps.
+P2 + P3 are quality-of-life and can wait for Phase 3 / Phase 6 hardening.
