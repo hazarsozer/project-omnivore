@@ -1,0 +1,45 @@
+{
+  "fixture_id": "txt-002",
+  "format": "txt",
+  "description": "Plain text — ML engineering guide with 12 topic sections",
+  "expected_handler": "text",
+  "expected_mime": "text/plain",
+  "expected_fragment_count_min": 8,
+  "expected_fragment_count_max": 30,
+  "expected_chunk_count_min": 8,
+  "expected_chunk_count_max": 16,
+  "expected_table_count": 0,
+  "difficulty": "medium",
+  "languages": ["en"],
+  "has_tables": false,
+  "queries": [
+    {
+      "query": "How do I train a model on multiple GPUs across machines?",
+      "relevant_content_substrings": ["DistributedDataParallel", "DDP", "all-reduce"]
+    },
+    {
+      "query": "What is the fastest way to reduce GPU memory usage during training?",
+      "relevant_content_substrings": ["Mixed Precision", "float16", "bfloat16"]
+    },
+    {
+      "query": "How do I prevent my training from losing progress on a spot instance?",
+      "relevant_content_substrings": ["Checkpointing", "atomic writes", "S3"]
+    },
+    {
+      "query": "How do I find the best learning rate and batch size automatically?",
+      "relevant_content_substrings": ["Hyperparameter", "Bayesian", "Optuna"]
+    },
+    {
+      "query": "How do I make my model run faster on CPU devices for deployment?",
+      "relevant_content_substrings": ["Quantization", "int8", "TensorRT"]
+    },
+    {
+      "query": "What causes NaN loss during training?",
+      "relevant_content_substrings": ["exploding gradients", "NaN", "gradient norms"]
+    },
+    {
+      "query": "How do I load training data efficiently without bottlenecking the GPU?",
+      "relevant_content_substrings": ["DataLoader", "num_workers", "pin_memory"]
+    }
+  ]
+}

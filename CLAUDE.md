@@ -108,7 +108,7 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 
 ## What is NOT in scope yet (don't build it ahead of its phase)
 
-- Audio/video blob streaming (currently whole-file-in-RAM, max 500 MB) — Phase 2c. Needs `IngestContext.stream_blob()`.
+- ~~Audio/video blob streaming~~ — Done (Phase 2c). `IngestContext.stream_blob()` implemented; audio/video handlers stream to disk instead of loading into RAM.
 - Image OCR multilingual support (currently English only) — Phase 2c.
 - LLM summarization, NER, sentiment — Phase 3
 - Routing policy engine (jsonlogic) — Phase 3
@@ -132,8 +132,8 @@ These are documented in `docs/architecture.md §9`. The most load-bearing ones:
 - **Q14** — Visual retrieval trigger: recall@10 gap > 15% → then consider Qdrant.
 - **Q16** — Eval gold-set ownership: engineering owns it, versioned under `eval/fixtures/`.
 - **Q17** — Image OCR backend: PaddleOCR 3.x rejected — ONEDNN/PIR executor incompatibility on consumer Intel/AMD CPUs (2026-05). **EasyOCR (Apache 2.0, PyTorch-based) is the current default.** Re-evaluate PaddleOCR when they release a PIR-stable CPU wheel.
-- **Q18** — GPU worker blob streaming: audio/video handlers load whole file into RAM before processing (max 500 MB via `MAX_GPU_INPUT_BYTES`). Streaming requires `IngestContext.stream_blob() → AsyncIterator[bytes]`. Gate: first file > 500 MB rejected in prod → implement streaming.
-- **Q19** — Bakeoff result: BGE-M3 beats BGE-base by 18.7% recall@1 and 43.6% recall@3 on 9-chunk pooled corpus. Exceeds the 10% switch threshold. Switching blocked pending: (a) larger fixture set for statistical confidence, (b) DB vector column resize (768 → 1024) migration. See `eval/results/phase2b-bakeoff-baseline.json`.
+- **Q18** — **Resolved (2026-05-08).** `IngestContext.stream_blob() → AsyncIterator[bytes]` implemented in `pipeline/context.py`. Audio and video handlers now stream to temp file instead of buffering the full blob. `MAX_GPU_INPUT_BYTES` guard removed from both handlers. `_DiskCtx` in `eval/runner.py` updated with a chunked local implementation.
+- **Q19** — **BGE-M3 switch BLOCKED (2026-05-08 decision).** Phase 2c expanded the corpus to 53 chunks (7 fixtures, 39 queries). BGE-M3 does not clear the ≥10% recall@1 threshold: BGE-base leads recall@1 (0.361 vs 0.332, BGE-M3 is −8%). BGE-M3 edges on nDCG@3 (+5.1%) and recall@3 (+7.6%) but neither clears the bar. The 9-chunk result (+18.7%) was a statistical artifact. **BGE-base-en-v1.5 (768-dim) remains the production model. Do not plan the vector(768)→vector(1024) migration.** Re-evaluate if a qualitatively different retrieval failure pattern emerges in production. See `eval/results/README.md` for full results.
 
 ---
 

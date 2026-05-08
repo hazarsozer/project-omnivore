@@ -570,3 +570,102 @@ async def test_outbox_relay_handles_enqueue_failure_gracefully():
 
     # Only the first row succeeds; second fails gracefully
     assert result == {"published": 1}
+
+
+# ---------------------------------------------------------------------------
+# Idempotency (Phase 2c)
+# ---------------------------------------------------------------------------
+
+async def test_ingest_dispatch_already_indexed_returns_early():
+    """Re-dispatching a document that is already indexed skips all processing."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "indexed"
+    session_local, db = _make_session_ctx(doc)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "indexed"
+    assert out["reason"] == "already_processed"
+    # Extraction must not have been called — handler extract would need a real extract call
+    db.commit.assert_not_called()
+
+
+async def test_ingest_dispatch_already_failed_returns_early():
+    """Re-dispatching a document that previously failed skips re-processing."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "failed"
+    session_local, _ = _make_session_ctx(doc)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "failed"
+    assert out["reason"] == "already_processed"
+
+
+# ---------------------------------------------------------------------------
+# DLQ — retry payload stored on failure (Phase 2c)
+# ---------------------------------------------------------------------------
+
+async def test_ingest_dispatch_handler_extract_fails_stores_retry_payload():
+    """When extraction fails, doc.error must contain retry_payload for re-enqueueing."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    session_local, db = _make_session_ctx(doc)
+
+    class _BrokenHandler:
+        name = "broken"
+        version = "0.0.1"
+        accepts = ("application/fake",)
+        cost_class = "cpu"
+        timeout_seconds = 30
+
+        async def extract(self, blob, ctx):
+            raise RuntimeError("simulated extraction failure")
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_BrokenHandler),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={"key": "val"},
+        )
+
+    assert out["status"] == "error"
+    # doc.error must be a dict with reason + retry_payload
+    assert doc.error is not None
+    assert "reason" in doc.error
+    assert "retry_payload" in doc.error
+    rp = doc.error["retry_payload"]
+    assert rp["task"] == "ingest_dispatch"
+    assert rp["kwargs"]["document_id"] == str(doc_id)
+    assert rp["kwargs"]["mime"] == "application/fake"
+    assert rp["kwargs"]["config_snapshot"] == {"key": "val"}

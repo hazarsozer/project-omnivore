@@ -56,10 +56,12 @@ def _make_upload_mock(content: bytes = b"hello file", filename: str = "test.txt"
     return f
 
 
-def _make_request(arq_pool=None) -> MagicMock:
+def _make_request(arq_pool=None, queue_depth: int = 0) -> MagicMock:
     req = MagicMock()
     req.app = MagicMock()
     req.app.state = MagicMock()
+    if arq_pool is not None:
+        arq_pool.zcard = AsyncMock(return_value=queue_depth)
     req.app.state.arq_pool = arq_pool
     return req
 
@@ -67,6 +69,7 @@ def _make_request(arq_pool=None) -> MagicMock:
 def _mock_settings() -> MagicMock:
     s = MagicMock()
     s.MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+    s.MAX_QUEUE_DEPTH = 100
     s.MINIO_ENDPOINT = "localhost:9000"
     s.MINIO_SECURE = False
     s.MINIO_ACCESS_KEY = "minioadmin"
@@ -394,3 +397,47 @@ async def test_upload_document_arq_enqueue_failure_does_not_raise():
     assert resp.status_code == 202
     assert body["data"]["status"] == "queued"
     arq_pool.enqueue_job.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Backpressure (Phase 2c)
+# ---------------------------------------------------------------------------
+
+async def test_upload_returns_429_when_queue_full():
+    """Upload is rejected with 429 when the CPU queue depth exceeds MAX_QUEUE_DEPTH."""
+    db = _make_db(scalar_return=None)
+    arq_pool = AsyncMock()
+    # queue_depth=100 == MAX_QUEUE_DEPTH=100, so >= triggers the guard
+    req = _make_request(arq_pool=arq_pool, queue_depth=100)
+    upload = _make_upload_mock(b"some file content")
+    mock_session, _ = _mock_s3_session()
+
+    with (
+        patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+    ):
+        from fastapi import HTTPException
+        try:
+            await upload_document(request=req, file=upload, db=db)
+            assert False, "Expected HTTPException 429"
+        except HTTPException as exc:
+            assert exc.status_code == 429
+
+
+async def test_upload_proceeds_when_queue_below_limit():
+    """Upload is accepted when the CPU queue has capacity."""
+    db = _make_db(scalar_return=None)
+    arq_pool = AsyncMock()
+    req = _make_request(arq_pool=arq_pool, queue_depth=99)  # one below MAX_QUEUE_DEPTH=100
+    upload = _make_upload_mock(b"some file content")
+    mock_session, _ = _mock_s3_session()
+
+    with (
+        patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+    ):
+        resp = await upload_document(request=req, file=upload, db=db)
+
+    assert resp.status_code == 202

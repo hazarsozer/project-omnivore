@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
+from omnivore.config import get_settings
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.models import ExtractionResult, Fragment, PagePosition
 
@@ -34,22 +35,26 @@ class ImageOcrHandler:
     cost_class: ClassVar[str] = "gpu"
     timeout_seconds: ClassVar[int] = 300
 
-    _reader: ClassVar[easyocr.Reader | None] = None
+    # Keyed by language tuple so different language sets each get their own reader instance.
+    _readers: ClassVar[dict[tuple[str, ...], easyocr.Reader]] = {}
 
     @classmethod
-    def _get_reader(cls) -> easyocr.Reader:
-        if cls._reader is None:
+    def _get_reader(cls, languages: tuple[str, ...]) -> easyocr.Reader:
+        if languages not in cls._readers:
             with _model_lock:
-                if cls._reader is None:
+                if languages not in cls._readers:
                     import easyocr as _easyocr
                     import torch
 
                     gpu = torch.cuda.is_available()
-                    cls._reader = _easyocr.Reader(["en"], gpu=gpu, verbose=False)
-                    logger.info("image_ocr.model.loaded", gpu=gpu)
-        return cls._reader  # type: ignore[return-value]
+                    cls._readers[languages] = _easyocr.Reader(list(languages), gpu=gpu, verbose=False)
+                    logger.info("image_ocr.model.loaded", gpu=gpu, languages=list(languages))
+        return cls._readers[languages]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
+        lang_override = ctx.config.get("ocr_languages") if isinstance(ctx.config, dict) else None
+        languages = tuple(lang_override) if lang_override else tuple(get_settings().IMAGE_OCR_LANGUAGES)
+
         data = await ctx.read_blob()
 
         def _run_ocr(raw: bytes) -> list:
@@ -58,7 +63,7 @@ class ImageOcrHandler:
 
             img = Image.open(io.BytesIO(raw)).convert("RGB")
             arr = np.array(img)
-            reader = self._get_reader()
+            reader = self._get_reader(languages)
             return reader.readtext(arr)
 
         loop = asyncio.get_running_loop()

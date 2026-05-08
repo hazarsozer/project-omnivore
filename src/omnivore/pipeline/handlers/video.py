@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
-from omnivore.config import get_settings
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.models import ExtractionResult, Fragment, TimePosition
 
@@ -64,24 +63,16 @@ class VideoHandler:
         return cls._model  # type: ignore[return-value]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
-        limit = get_settings().MAX_GPU_INPUT_BYTES
-        if blob.size_bytes > limit:
-            raise ValueError(
-                f"Video file {blob.size_bytes} bytes exceeds MAX_GPU_INPUT_BYTES ({limit}). "
-                "Stream-from-blob support is planned for Phase 2c."
-            )
-        data = await ctx.read_blob()
         video_suffix = _MIME_SUFFIXES.get(blob.mime_type, ".mp4")
-
-        # Write video bytes to a temp file, extract audio track, transcribe.
         vid_fd, vid_path = tempfile.mkstemp(suffix=video_suffix)
         audio_fd, audio_path = tempfile.mkstemp(suffix=".wav")
+        os.close(audio_fd)  # we only need the path; close fd before entering the try block
         try:
             try:
-                os.write(vid_fd, data)
+                async for chunk in ctx.stream_blob():
+                    os.write(vid_fd, chunk)
             finally:
                 os.close(vid_fd)
-            os.close(audio_fd)
 
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, _extract_audio, vid_path, audio_path)

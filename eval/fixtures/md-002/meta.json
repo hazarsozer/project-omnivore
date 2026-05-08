@@ -1,0 +1,46 @@
+{
+  "fixture_id": "md-002",
+  "format": "markdown",
+  "description": "Technical markdown — Python asyncio guide with 13 H2 sections",
+  "expected_handler": "markdown",
+  "expected_mime": "text/markdown",
+  "expected_fragment_count_min": 10,
+  "expected_fragment_count_max": 40,
+  "expected_chunk_count_min": 10,
+  "expected_chunk_count_max": 20,
+  "expected_table_count": 0,
+  "difficulty": "medium",
+  "languages": ["en"],
+  "has_tables": false,
+  "has_code_blocks": true,
+  "queries": [
+    {
+      "query": "How does Python schedule multiple coroutines to run at the same time?",
+      "relevant_content_substrings": ["asyncio.gather", "TaskGroup", "concurrently"]
+    },
+    {
+      "query": "What mechanism limits how many HTTP requests fire simultaneously?",
+      "relevant_content_substrings": ["Semaphore", "rate-limited"]
+    },
+    {
+      "query": "How do I propagate request IDs across async boundaries?",
+      "relevant_content_substrings": ["ContextVar", "context", "trace"]
+    },
+    {
+      "query": "What happens when a coroutine times out?",
+      "relevant_content_substrings": ["CancelledError", "TimeoutError", "wait_for"]
+    },
+    {
+      "query": "How should I write tests for async functions in pytest?",
+      "relevant_content_substrings": ["pytest-asyncio", "AsyncMock", "asyncio_mode"]
+    },
+    {
+      "query": "How do I stream data lazily from a database cursor?",
+      "relevant_content_substrings": ["async for", "AsyncIterable", "async generator"]
+    },
+    {
+      "query": "How do I shut down an asyncio server gracefully on SIGTERM?",
+      "relevant_content_substrings": ["SIGTERM", "signal", "shutdown"]
+    }
+  ]
+}

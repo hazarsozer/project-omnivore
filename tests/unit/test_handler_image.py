@@ -11,9 +11,10 @@ from omnivore.pipeline.models import PagePosition
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ctx(doc_id: uuid.UUID | None = None) -> MagicMock:
+def _make_ctx(doc_id: uuid.UUID | None = None, ocr_languages: list[str] | None = None) -> MagicMock:
     ctx = MagicMock()
     ctx.document_id = doc_id or uuid.uuid4()
+    ctx.config = {"ocr_languages": ocr_languages} if ocr_languages else {}
     # Return a minimal valid PNG so PIL can open it
     import io
 
@@ -137,6 +138,46 @@ async def test_image_ocr_tilted_bbox_still_axis_aligned():
 
     pos = result.fragments[0].position
     assert pos.bbox == (5.0, 5.0, 35.0, 35.0)
+
+
+# ---------------------------------------------------------------------------
+# Multilingual language config (Phase 2c)
+# ---------------------------------------------------------------------------
+
+async def test_image_ocr_uses_default_language_from_settings():
+    """Handler reads IMAGE_OCR_LANGUAGES from settings when ctx.config has no override."""
+    reader = MagicMock()
+    reader.readtext = MagicMock(return_value=[])
+    captured: list[tuple] = []
+
+    def _capture_reader(languages):
+        captured.append(languages)
+        return reader
+
+    with (
+        patch.object(ImageOcrHandler, "_get_reader", side_effect=_capture_reader),
+        patch("omnivore.pipeline.handlers.image.get_settings") as mock_settings,
+    ):
+        mock_settings.return_value.IMAGE_OCR_LANGUAGES = ["en"]
+        await ImageOcrHandler().extract(_make_blob(), _make_ctx())
+
+    assert captured == [("en",)]
+
+
+async def test_image_ocr_respects_per_request_language_override():
+    """ctx.config['ocr_languages'] overrides the global setting."""
+    reader = MagicMock()
+    reader.readtext = MagicMock(return_value=[])
+    captured: list[tuple] = []
+
+    def _capture_reader(languages):
+        captured.append(languages)
+        return reader
+
+    with patch.object(ImageOcrHandler, "_get_reader", side_effect=_capture_reader):
+        await ImageOcrHandler().extract(_make_blob(), _make_ctx(ocr_languages=["fr", "de"]))
+
+    assert captured == [("fr", "de")]
 
 
 # ---------------------------------------------------------------------------

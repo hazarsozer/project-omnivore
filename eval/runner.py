@@ -27,6 +27,11 @@ class _DiskCtx:
     async def read_blob(self) -> bytes:
         return self._path.read_bytes()
 
+    async def stream_blob(self, chunk_size: int = 65_536):  # noqa: ANN201
+        data = self._path.read_bytes()
+        for i in range(0, len(data), chunk_size):
+            yield data[i : i + chunk_size]
+
 
 async def run_fixture(source_file: Path, meta: dict, registry: HandlerRegistry) -> dict:
     data = source_file.read_bytes()

@@ -71,6 +71,16 @@ async def upload_document(
             ).model_dump(),
         )
 
+    # Backpressure: reject new uploads when the CPU queue is over the depth limit.
+    pool = getattr(request.app.state, "arq_pool", None)
+    if pool:
+        queue_depth = await pool.zcard("arq:queue")
+        if queue_depth >= settings.MAX_QUEUE_DEPTH:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Queue full ({queue_depth} pending jobs). Retry after some jobs complete.",
+            )
+
     document_id = uuid.uuid4()
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
     storage_key = f"raw/{tenant_id}/{datetime.now(UTC).strftime('%Y/%m')}/{document_id}.{ext}"
@@ -124,7 +134,6 @@ async def upload_document(
     await db.refresh(outbox_entry)
 
     # Best-effort immediate enqueue; outbox relay handles failures
-    pool = getattr(request.app.state, "arq_pool", None)
     if pool:
         try:
             await pool.enqueue_job("ingest_dispatch", **job_kwargs)

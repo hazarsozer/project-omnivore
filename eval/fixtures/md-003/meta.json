@@ -1,0 +1,50 @@
+{
+  "fixture_id": "md-003",
+  "format": "markdown",
+  "description": "Technical markdown — PostgreSQL internals guide with 13 H2 sections",
+  "expected_handler": "markdown",
+  "expected_mime": "text/markdown",
+  "expected_fragment_count_min": 10,
+  "expected_fragment_count_max": 40,
+  "expected_chunk_count_min": 10,
+  "expected_chunk_count_max": 20,
+  "expected_table_count": 0,
+  "difficulty": "medium",
+  "languages": ["en"],
+  "has_tables": false,
+  "has_code_blocks": false,
+  "queries": [
+    {
+      "query": "Why are my query row count estimates wrong in the execution plan?",
+      "relevant_content_substrings": ["pg_statistic", "ANALYZE", "statistics"]
+    },
+    {
+      "query": "How do I add a GIN index for querying JSONB columns?",
+      "relevant_content_substrings": ["GIN", "JSONB", "fastupdate"]
+    },
+    {
+      "query": "How do I prevent a CREATE INDEX from blocking production traffic?",
+      "relevant_content_substrings": ["CREATE INDEX CONCURRENTLY", "weaker lock"]
+    },
+    {
+      "query": "How do web applications share a small number of database connections?",
+      "relevant_content_substrings": ["PgBouncer", "transaction pooling", "pool"]
+    },
+    {
+      "query": "How does PostgreSQL ensure data is not lost on a crash?",
+      "relevant_content_substrings": ["WAL", "Write-Ahead Log", "fsync"]
+    },
+    {
+      "query": "How do I speed up queries that filter by date range on a huge table?",
+      "relevant_content_substrings": ["partition", "pruning", "range"]
+    },
+    {
+      "query": "How do I enforce per-tenant data isolation inside the database?",
+      "relevant_content_substrings": ["Row-Level Security", "RLS", "tenant"]
+    },
+    {
+      "query": "How do I find which SQL queries consume the most cumulative time?",
+      "relevant_content_substrings": ["pg_stat_statements", "total_exec_time"]
+    }
+  ]
+}

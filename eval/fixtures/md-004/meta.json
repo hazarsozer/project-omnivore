@@ -1,0 +1,50 @@
+{
+  "fixture_id": "md-004",
+  "format": "markdown",
+  "description": "Technical markdown — distributed systems patterns guide with 13 H2 sections",
+  "expected_handler": "markdown",
+  "expected_mime": "text/markdown",
+  "expected_fragment_count_min": 10,
+  "expected_fragment_count_max": 40,
+  "expected_chunk_count_min": 10,
+  "expected_chunk_count_max": 20,
+  "expected_table_count": 0,
+  "difficulty": "medium",
+  "languages": ["en"],
+  "has_tables": false,
+  "has_code_blocks": false,
+  "queries": [
+    {
+      "query": "When should I choose a CP system over an AP system?",
+      "relevant_content_substrings": ["CAP Theorem", "Consistency", "Availability"]
+    },
+    {
+      "query": "How do I handle conflicting writes when nodes diverge?",
+      "relevant_content_substrings": ["Eventual Consistency", "conflict resolution", "CRDT"]
+    },
+    {
+      "query": "How does a distributed database elect a new leader when the primary fails?",
+      "relevant_content_substrings": ["Leader Election", "Raft", "consensus"]
+    },
+    {
+      "query": "How do I coordinate a transaction that spans multiple microservices?",
+      "relevant_content_substrings": ["Saga", "compensating", "orchestration"]
+    },
+    {
+      "query": "How do I prevent one failing service from taking down the rest of the system?",
+      "relevant_content_substrings": ["Circuit Breaker", "cascading failures", "short-circuit"]
+    },
+    {
+      "query": "How do I store a complete history of all changes made to an entity?",
+      "relevant_content_substrings": ["Event Sourcing", "append-only", "audit trail"]
+    },
+    {
+      "query": "How do I make an API endpoint safe to retry without duplicating side effects?",
+      "relevant_content_substrings": ["Idempotency", "idempotency key", "duplicate"]
+    },
+    {
+      "query": "How do I stop a fast producer from overwhelming a slow consumer?",
+      "relevant_content_substrings": ["Backpressure", "load shedding", "queue"]
+    }
+  ]
+}

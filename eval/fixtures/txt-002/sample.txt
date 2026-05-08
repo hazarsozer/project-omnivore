@@ -1,0 +1,49 @@
+Machine Learning Engineering: Training, Evaluation, and Production Deployment
+
+PyTorch Training Loop Fundamentals
+
+A well-structured training loop calls model.train() before the forward pass and optimizer.zero_grad() before loss.backward(). Forgetting zero_grad() accumulates gradients across batches, producing incorrect parameter updates. After backward(), call optimizer.step() to apply the computed gradients. Log loss and metrics every N steps rather than every step to avoid logging overhead dominating short training runs. Save the model state_dict, not the model object itself, to avoid pickle version issues when resuming on a different PyTorch version.
+
+DataLoader Configuration and Performance
+
+The DataLoader controls how training data is batched, shuffled, and loaded in parallel. Set num_workers to the number of CPU cores available for loading -- zero means data is loaded in the main process, which blocks training. Use pin_memory=True when training on GPU to accelerate host-to-device transfers. Avoid large num_workers on machines with small /dev/shm since each worker keeps a copy of the dataset; prefer memory-mapped formats like LMDB or Arrow instead. With IterableDatasets, set worker_init_fn to give each worker a different random seed so batches are not duplicated across workers.
+
+Mixed Precision Training
+
+Automatic Mixed Precision (AMP) runs the forward pass in float16 or bfloat16 and accumulates gradients in float32, reducing GPU memory usage by roughly 50% and increasing throughput on Tensor Core hardware. Use torch.amp.autocast() as a context manager around the forward pass and loss computation. Pair it with GradScaler to prevent float16 underflow: the scaler multiplies the loss before backward() and unscales gradients before optimizer.step(), skipping the step if NaN or Inf is detected. On Ampere GPUs, prefer bfloat16 over float16 because bfloat16 has the same dynamic range as float32 and does not require gradient scaling.
+
+Gradient Clipping and Stability
+
+Gradient clipping prevents exploding gradients that destabilize RNN and Transformer training. Call torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm) after backward() and before optimizer.step(). A max_norm of 1.0 is a common starting point; monitor the gradient norm over training to choose a threshold that triggers only on spikes. If the norm consistently hits the clip threshold, the learning rate or architecture may need adjustment rather than just clamping gradients harder.
+
+Learning Rate Scheduling
+
+Learning rate schedulers adjust the step size during training to improve convergence. CosineAnnealingLR decays the rate following a cosine curve, reaching near-zero at the end of T_max steps. OneCycleLR starts low, peaks at max_lr, and decays -- it is popular for fast fine-tuning. ReduceLROnPlateau monitors a validation metric and halves the rate when the metric stagnates. Call scheduler.step() after optimizer.step() (or after each epoch for epoch-level schedulers). Warm-up -- a short linear ramp from zero to the target rate -- prevents instability at the start of training when parameters are random.
+
+Checkpointing and Resumable Training
+
+Save checkpoints frequently enough to limit lost work on pre-emption. A checkpoint should include: model state_dict, optimizer state_dict, scheduler state_dict, current epoch, current step, and the best validation metric. Resume by loading all of these; omitting the optimizer state restarts momentum and variance terms, causing a temporary loss spike. On cloud spot instances, save to durable storage like S3 immediately rather than relying on local disk that disappears on pre-emption. Use atomic writes: save to a temp file and rename to the target path to prevent a partial checkpoint from corrupting a previous good one.
+
+Distributed Data Parallel Training
+
+DistributedDataParallel (DDP) replicates the model across GPUs and synchronizes gradients via all-reduce after each backward pass. Each process handles a shard of the data -- use DistributedSampler to partition the dataset. Initialize the process group with torch.distributed.init_process_group before constructing the model. Wrap the model with DDP after moving it to its device. To avoid broadcasting the initial model parameters across nodes, call torch.distributed.barrier() after the first process saves the initial checkpoint and other processes load it.
+
+Evaluation and Metrics
+
+Run evaluation in a torch.no_grad() context to suppress gradient computation, halving memory usage during inference. Use model.eval() to switch BatchNorm and Dropout to inference mode; failing to do this is a common source of subtle train-eval discrepancy. For classification, track top-1 and top-5 accuracy, precision, recall, and F1. For generation, use BLEU, ROUGE, or BERTScore depending on the task. Compute metrics on the full validation set in a single pass rather than averaging per-batch metrics, which gives incorrect results when batch sizes vary.
+
+Hyperparameter Search and Experiment Tracking
+
+Grid search exhaustively tests all combinations but scales poorly -- prefer random search for more than three hyperparameters. Bayesian optimization (Optuna, Ray Tune) models the objective as a Gaussian process and proposes trials that balance exploration and exploitation. Early stopping with Hyperband prunes unpromising trials based on intermediate metrics, dramatically reducing total compute. Log all hyperparameters and metrics to an experiment tracker (MLflow, W&B, Neptune) so comparisons remain reproducible. Always fix the random seed for reproducibility before reporting the best configuration.
+
+Model Quantization for Inference
+
+Post-training quantization converts float32 weights to int8, reducing model size by 4x and inference latency by 2-3x on CPU hardware. PyTorch supports static quantization calibrated with representative data and dynamic quantization where weights are quantized offline and activations at runtime. Quantization-aware training (QAT) simulates quantization during training for higher accuracy at lower bit widths. For deployment on edge devices, ONNX export followed by TensorRT or OpenVINO compilation gives additional latency reduction through kernel fusion and layer optimization.
+
+Serving Models in Production
+
+Use TorchServe or Triton Inference Server to expose models over HTTP/gRPC with batching, versioning, and health checks. Batch inference groups multiple requests into a single forward pass, amortizing the fixed overhead of GPU kernel launch and memory transfer. Set a maximum batch size and a batching timeout: if fewer than max_size requests arrive within the timeout, process the partial batch rather than waiting. Monitor inference latency at p50, p95, and p99 percentiles -- tail latency matters most to user experience. Cache embeddings for frequently-seen inputs to avoid redundant GPU computation.
+
+Debugging Training Failures
+
+A loss of NaN usually indicates exploding gradients, a learning rate too high, or numerical overflow in a custom layer. Check gradient norms before clipping to isolate where the explosion starts. Loss plateau without improvement often means the learning rate is too low or the data contains label noise. Use gradient checkpointing to trade compute for memory when out-of-memory errors occur on large models -- it re-computes activations during backward instead of storing them all. Visualize weight distributions and gradient flow with TensorBoard histogram and gradient norm summaries to diagnose dying ReLUs or vanishing gradients.

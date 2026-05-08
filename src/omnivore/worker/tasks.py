@@ -31,12 +31,16 @@ async def ingest_dispatch(
     tenant_id: str,
     config_snapshot: dict,
 ) -> dict:
+    _job_kwargs = {
+        "document_id": document_id, "mime": mime, "size": size,
+        "tenant_id": tenant_id, "config_snapshot": config_snapshot,
+    }
     handler_cls = registry.resolve(mime)
     if handler_cls is None:
         async with AsyncSessionLocal() as db:
             doc = await db.get(Document, uuid.UUID(document_id))
             if doc:
-                await _fail_document(db, doc, f"No handler for MIME type: {mime}")
+                await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
         return {"status": "error", "reason": "no_handler"}
 
     if handler_cls.cost_class in GPU_COST_CLASSES:
@@ -69,12 +73,16 @@ async def gpu_ingest_dispatch(
     tenant_id: str,
     config_snapshot: dict,
 ) -> dict:
+    _job_kwargs = {
+        "document_id": document_id, "mime": mime, "size": size,
+        "tenant_id": tenant_id, "config_snapshot": config_snapshot,
+    }
     handler_cls = registry.resolve(mime)
     if handler_cls is None:
         async with AsyncSessionLocal() as db:
             doc = await db.get(Document, uuid.UUID(document_id))
             if doc:
-                await _fail_document(db, doc, f"No handler for MIME type: {mime}")
+                await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
         return {"status": "error", "reason": "no_handler"}
 
     return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
@@ -93,6 +101,10 @@ async def _run_ingest(
     settings = get_settings()
     doc_id = uuid.UUID(document_id)
     t_id = uuid.UUID(tenant_id)
+    job_kwargs = {
+        "document_id": document_id, "mime": mime, "size": size,
+        "tenant_id": tenant_id, "config_snapshot": config_snapshot,
+    }
 
     logger.info("ingest.dispatch.received", document_id=document_id, mime=mime)
 
@@ -101,6 +113,12 @@ async def _run_ingest(
         if doc is None:
             logger.error("ingest.dispatch.doc_not_found", document_id=document_id)
             return {"status": "error", "reason": "document_not_found"}
+
+        # Idempotency: if the document reached a terminal state already (duplicate enqueue
+        # from outbox relay or manual retry), skip re-processing.
+        if doc.status in ("indexed", "failed"):
+            logger.info("ingest.dispatch.already_processed", document_id=document_id, status=doc.status)
+            return {"status": doc.status, "document_id": document_id, "reason": "already_processed"}
 
         handler = handler_cls()
         bucket, key = _parse_storage_uri(doc.storage_uri)
@@ -123,7 +141,7 @@ async def _run_ingest(
             result = await handler.extract(blob, ingest_ctx)
         except Exception as exc:
             logger.exception("handler.extract.failed", document_id=document_id, handler=handler.name)
-            await _fail_document(db, doc, str(exc))
+            await _fail_document(db, doc, str(exc), job_kwargs)
             return {"status": "error", "reason": str(exc)}
 
         doc.status = "enriching"
@@ -244,9 +262,12 @@ async def on_shutdown(ctx: dict) -> None:
     logger.info("worker.shutdown")
 
 
-async def _fail_document(db, doc: Document, reason: str) -> None:
+async def _fail_document(db, doc: Document, reason: str, job_kwargs: dict | None = None) -> None:
     doc.status = "failed"
-    doc.error = {"reason": reason}
+    doc.error = {
+        "reason": reason,
+        **({"retry_payload": {"task": "ingest_dispatch", "kwargs": job_kwargs}} if job_kwargs else {}),
+    }
     await db.commit()
 
 

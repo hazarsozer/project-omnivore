@@ -1,11 +1,15 @@
 {
-  "run_at": "2026-05-07T18:50:45.530519+00:00",
-  "run_id": "20260507T185045Z",
-  "corpus_size": 9,
+  "run_at": "2026-05-08T10:35:12.665464+00:00",
+  "run_id": "20260508T103512Z",
+  "corpus_size": 53,
   "corpus_fixtures": [
     "html-001",
     "md-001",
-    "txt-001"
+    "md-002",
+    "md-003",
+    "md-004",
+    "txt-001",
+    "txt-002"
   ],
   "primary_metric": "recall@1 (pooled corpus)",
   "note": "All fixture chunks pooled into one corpus. k=1 is the primary discriminative metric. k=10 >= corpus_size so recall@10 is trivially 1.0 \u2014 included for completeness.",
@@ -14,10 +18,10 @@
     {
       "key": "bge-base",
       "model_id": "BAAI/bge-base-en-v1.5",
-      "mean_recall_at_1": 0.2963,
-      "mean_recall_at_3": 0.6574,
-      "mean_ndcg_at_1": 0.7778,
-      "mean_ndcg_at_3": 0.6884,
+      "mean_recall_at_1": 0.361,
+      "mean_recall_at_3": 0.6505,
+      "mean_ndcg_at_1": 0.7179,
+      "mean_ndcg_at_3": 0.7247,
       "error": null,
       "query_scores": [
         {
@@ -36,7 +40,7 @@
           "recall_at_1": 0.5,
           "recall_at_3": 0.5,
           "recall_at_5": 0.5,
-          "recall_at_10": 1.0,
+          "recall_at_10": 0.5,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 0.6131
         },
@@ -63,12 +67,12 @@
         {
           "fixture_id": "md-001",
           "query": "How do I run the infrastructure stack?",
-          "recall_at_1": 0.5,
+          "recall_at_1": 0.0,
           "recall_at_3": 0.5,
           "recall_at_5": 0.5,
-          "recall_at_10": 1.0,
-          "ndcg_at_1": 1.0,
-          "ndcg_at_3": 0.6131
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.3066
         },
         {
           "fixture_id": "md-001",
@@ -81,22 +85,252 @@
           "ndcg_at_3": 0.7654
         },
         {
-          "fixture_id": "txt-001",
-          "query": "What database stores extracted document data?",
-          "recall_at_1": 0.25,
-          "recall_at_3": 0.5,
-          "recall_at_5": 0.75,
-          "recall_at_10": 1.0,
+          "fixture_id": "md-002",
+          "query": "How does Python schedule multiple coroutines to run at the same time?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.4,
+          "recall_at_10": 0.4,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.2346
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What mechanism limits how many HTTP requests fire simultaneously?",
+          "recall_at_1": 0.3333,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I propagate request IDs across async boundaries?",
+          "recall_at_1": 0.125,
+          "recall_at_3": 0.25,
+          "recall_at_5": 0.375,
+          "recall_at_10": 0.5,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What happens when a coroutine times out?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How should I write tests for async functions in pytest?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I stream data lazily from a database cursor?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.6131
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I shut down an asyncio server gracefully on SIGTERM?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.6667,
+          "recall_at_5": 0.6667,
+          "recall_at_10": 0.6667,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5307
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "Why are my query row count estimates wrong in the execution plan?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I add a GIN index for querying JSONB columns?",
+          "recall_at_1": 0.0769,
+          "recall_at_3": 0.1538,
+          "recall_at_5": 0.2308,
+          "recall_at_10": 0.3077,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I prevent a CREATE INDEX from blocking production traffic?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do web applications share a small number of database connections?",
+          "recall_at_1": 0.1429,
+          "recall_at_3": 0.2857,
+          "recall_at_5": 0.2857,
+          "recall_at_10": 0.4286,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How does PostgreSQL ensure data is not lost on a crash?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.0,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I speed up queries that filter by date range on a huge table?",
+          "recall_at_1": 0.1111,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.4444,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I enforce per-tenant data isolation inside the database?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I find which SQL queries consume the most cumulative time?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "When should I choose a CP system over an AP system?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.4,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.2961
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I handle conflicting writes when nodes diverge?",
+          "recall_at_1": 0.25,
+          "recall_at_3": 0.75,
+          "recall_at_5": 0.75,
+          "recall_at_10": 0.75,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How does a distributed database elect a new leader when the primary fails?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I coordinate a transaction that spans multiple microservices?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I prevent one failing service from taking down the rest of the system?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I store a complete history of all changes made to an entity?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.1667,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.6667,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I make an API endpoint safe to retry without duplicating side effects?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.6131
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I stop a fast producer from overwhelming a slow consumer?",
+          "recall_at_1": 0.2,
+          "recall_at_3": 0.6,
+          "recall_at_5": 0.6,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "What database stores extracted document data?",
+          "recall_at_1": 0.0909,
+          "recall_at_3": 0.1818,
+          "recall_at_5": 0.1818,
+          "recall_at_10": 0.3636,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
         },
         {
           "fixture_id": "txt-001",
           "query": "How do I get started with the project?",
           "recall_at_1": 0.0,
           "recall_at_3": 0.0,
-          "recall_at_5": 0.5,
-          "recall_at_10": 1.0,
+          "recall_at_5": 0.0,
+          "recall_at_10": 0.3333,
           "ndcg_at_1": 0.0,
           "ndcg_at_3": 0.0
         },
@@ -109,16 +343,86 @@
           "recall_at_10": 1.0,
           "ndcg_at_1": 0.0,
           "ndcg_at_3": 0.5
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I train a model on multiple GPUs across machines?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What is the fastest way to reduce GPU memory usage during training?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I prevent my training from losing progress on a spot instance?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.5,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.3869
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I find the best learning rate and batch size automatically?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I make my model run faster on CPU devices for deployment?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What causes NaN loss during training?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I load training data efficiently without bottlenecking the GPU?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
         }
       ]
     },
     {
       "key": "bge-m3",
       "model_id": "BAAI/bge-m3",
-      "mean_recall_at_1": 0.3518,
-      "mean_recall_at_3": 0.9444,
-      "mean_ndcg_at_1": 0.8889,
-      "mean_ndcg_at_3": 0.959,
+      "mean_recall_at_1": 0.332,
+      "mean_recall_at_3": 0.6997,
+      "mean_ndcg_at_1": 0.7436,
+      "mean_ndcg_at_3": 0.762,
       "error": null,
       "query_scores": [
         {
@@ -182,24 +486,254 @@
           "ndcg_at_3": 1.0
         },
         {
-          "fixture_id": "txt-001",
-          "query": "What database stores extracted document data?",
-          "recall_at_1": 0.25,
-          "recall_at_3": 0.75,
+          "fixture_id": "md-002",
+          "query": "How does Python schedule multiple coroutines to run at the same time?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.4,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.2346
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What mechanism limits how many HTTP requests fire simultaneously?",
+          "recall_at_1": 0.3333,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I propagate request IDs across async boundaries?",
+          "recall_at_1": 0.125,
+          "recall_at_3": 0.25,
+          "recall_at_5": 0.375,
+          "recall_at_10": 0.375,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What happens when a coroutine times out?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How should I write tests for async functions in pytest?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
           "recall_at_5": 1.0,
           "recall_at_10": 1.0,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 1.0
         },
         {
-          "fixture_id": "txt-001",
-          "query": "How do I get started with the project?",
+          "fixture_id": "md-002",
+          "query": "How do I stream data lazily from a database cursor?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I shut down an asyncio server gracefully on SIGTERM?",
+          "recall_at_1": 0.3333,
+          "recall_at_3": 0.6667,
+          "recall_at_5": 0.6667,
+          "recall_at_10": 0.6667,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "Why are my query row count estimates wrong in the execution plan?",
           "recall_at_1": 0.5,
           "recall_at_3": 1.0,
           "recall_at_5": 1.0,
           "recall_at_10": 1.0,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I add a GIN index for querying JSONB columns?",
+          "recall_at_1": 0.0769,
+          "recall_at_3": 0.2308,
+          "recall_at_5": 0.2308,
+          "recall_at_10": 0.3846,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I prevent a CREATE INDEX from blocking production traffic?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do web applications share a small number of database connections?",
+          "recall_at_1": 0.1429,
+          "recall_at_3": 0.2857,
+          "recall_at_5": 0.2857,
+          "recall_at_10": 0.4286,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How does PostgreSQL ensure data is not lost on a crash?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.2,
+          "recall_at_10": 0.4,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I speed up queries that filter by date range on a huge table?",
+          "recall_at_1": 0.1111,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.4444,
+          "recall_at_10": 0.5556,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I enforce per-tenant data isolation inside the database?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I find which SQL queries consume the most cumulative time?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "When should I choose a CP system over an AP system?",
+          "recall_at_1": 0.2,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.2,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I handle conflicting writes when nodes diverge?",
+          "recall_at_1": 0.25,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.75,
+          "recall_at_10": 0.75,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How does a distributed database elect a new leader when the primary fails?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I coordinate a transaction that spans multiple microservices?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.9197
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I prevent one failing service from taking down the rest of the system?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I store a complete history of all changes made to an entity?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.1667,
+          "recall_at_5": 0.1667,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I make an API endpoint safe to retry without duplicating side effects?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.6131
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I stop a fast producer from overwhelming a slow consumer?",
+          "recall_at_1": 0.2,
+          "recall_at_3": 0.6,
+          "recall_at_5": 0.6,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "What database stores extracted document data?",
+          "recall_at_1": 0.0909,
+          "recall_at_3": 0.2727,
+          "recall_at_5": 0.3636,
+          "recall_at_10": 0.4545,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "How do I get started with the project?",
+          "recall_at_1": 0.3333,
+          "recall_at_3": 0.6667,
+          "recall_at_5": 0.6667,
+          "recall_at_10": 0.6667,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
         },
         {
           "fixture_id": "txt-001",
@@ -210,16 +744,86 @@
           "recall_at_10": 1.0,
           "ndcg_at_1": 0.0,
           "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I train a model on multiple GPUs across machines?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What is the fastest way to reduce GPU memory usage during training?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I prevent my training from losing progress on a spot instance?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6934
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I find the best learning rate and batch size automatically?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.9197
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I make my model run faster on CPU devices for deployment?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What causes NaN loss during training?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I load training data efficiently without bottlenecking the GPU?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
         }
       ]
     },
     {
       "key": "nomic",
       "model_id": "nomic-ai/nomic-embed-text-v1.5",
-      "mean_recall_at_1": 0.2407,
-      "mean_recall_at_3": 0.5741,
+      "mean_recall_at_1": 0.312,
+      "mean_recall_at_3": 0.5947,
       "mean_ndcg_at_1": 0.6667,
-      "mean_ndcg_at_3": 0.6317,
+      "mean_ndcg_at_3": 0.6577,
       "error": null,
       "query_scores": [
         {
@@ -238,7 +842,7 @@
           "recall_at_1": 0.5,
           "recall_at_3": 0.5,
           "recall_at_5": 0.5,
-          "recall_at_10": 1.0,
+          "recall_at_10": 0.5,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 0.6131
         },
@@ -266,11 +870,11 @@
           "fixture_id": "md-001",
           "query": "How do I run the infrastructure stack?",
           "recall_at_1": 0.0,
-          "recall_at_3": 0.5,
-          "recall_at_5": 1.0,
-          "recall_at_10": 1.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.0,
+          "recall_at_10": 0.0,
           "ndcg_at_1": 0.0,
-          "ndcg_at_3": 0.3066
+          "ndcg_at_3": 0.0
         },
         {
           "fixture_id": "md-001",
@@ -283,12 +887,242 @@
           "ndcg_at_3": 1.0
         },
         {
-          "fixture_id": "txt-001",
-          "query": "What database stores extracted document data?",
-          "recall_at_1": 0.25,
-          "recall_at_3": 0.75,
+          "fixture_id": "md-002",
+          "query": "How does Python schedule multiple coroutines to run at the same time?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.4,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.2346
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What mechanism limits how many HTTP requests fire simultaneously?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.2961
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I propagate request IDs across async boundaries?",
+          "recall_at_1": 0.125,
+          "recall_at_3": 0.125,
+          "recall_at_5": 0.125,
+          "recall_at_10": 0.375,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "What happens when a coroutine times out?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
           "recall_at_5": 1.0,
           "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How should I write tests for async functions in pytest?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I stream data lazily from a database cursor?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 0.5,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.6131
+        },
+        {
+          "fixture_id": "md-002",
+          "query": "How do I shut down an asyncio server gracefully on SIGTERM?",
+          "recall_at_1": 0.3333,
+          "recall_at_3": 0.6667,
+          "recall_at_5": 0.6667,
+          "recall_at_10": 0.6667,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "Why are my query row count estimates wrong in the execution plan?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I add a GIN index for querying JSONB columns?",
+          "recall_at_1": 0.0769,
+          "recall_at_3": 0.1538,
+          "recall_at_5": 0.1538,
+          "recall_at_10": 0.2308,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I prevent a CREATE INDEX from blocking production traffic?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do web applications share a small number of database connections?",
+          "recall_at_1": 0.1429,
+          "recall_at_3": 0.2857,
+          "recall_at_5": 0.4286,
+          "recall_at_10": 0.4286,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How does PostgreSQL ensure data is not lost on a crash?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.2,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I speed up queries that filter by date range on a huge table?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.2222,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.4444,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5307
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I enforce per-tenant data isolation inside the database?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "md-003",
+          "query": "How do I find which SQL queries consume the most cumulative time?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "When should I choose a CP system over an AP system?",
+          "recall_at_1": 0.2,
+          "recall_at_3": 0.2,
+          "recall_at_5": 0.2,
+          "recall_at_10": 0.4,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I handle conflicting writes when nodes diverge?",
+          "recall_at_1": 0.25,
+          "recall_at_3": 0.25,
+          "recall_at_5": 0.5,
+          "recall_at_10": 0.75,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.4693
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How does a distributed database elect a new leader when the primary fails?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I coordinate a transaction that spans multiple microservices?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.9197
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I prevent one failing service from taking down the rest of the system?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I store a complete history of all changes made to an entity?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.3333,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I make an API endpoint safe to retry without duplicating side effects?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 0.0,
+          "recall_at_5": 0.0,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "md-004",
+          "query": "How do I stop a fast producer from overwhelming a slow consumer?",
+          "recall_at_1": 0.2,
+          "recall_at_3": 0.4,
+          "recall_at_5": 0.6,
+          "recall_at_10": 0.6,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7654
+        },
+        {
+          "fixture_id": "txt-001",
+          "query": "What database stores extracted document data?",
+          "recall_at_1": 0.0909,
+          "recall_at_3": 0.2727,
+          "recall_at_5": 0.3636,
+          "recall_at_10": 0.4545,
           "ndcg_at_1": 1.0,
           "ndcg_at_3": 1.0
         },
@@ -297,8 +1131,8 @@
           "query": "How do I get started with the project?",
           "recall_at_1": 0.0,
           "recall_at_3": 0.0,
-          "recall_at_5": 0.5,
-          "recall_at_10": 1.0,
+          "recall_at_5": 0.0,
+          "recall_at_10": 0.3333,
           "ndcg_at_1": 0.0,
           "ndcg_at_3": 0.0
         },
@@ -311,6 +1145,76 @@
           "recall_at_10": 1.0,
           "ndcg_at_1": 0.0,
           "ndcg_at_3": 0.0
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I train a model on multiple GPUs across machines?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What is the fastest way to reduce GPU memory usage during training?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.5
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I prevent my training from losing progress on a spot instance?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.9197
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I find the best learning rate and batch size automatically?",
+          "recall_at_1": 0.5,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.9197
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I make my model run faster on CPU devices for deployment?",
+          "recall_at_1": 1.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 1.0
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "What causes NaN loss during training?",
+          "recall_at_1": 0.1667,
+          "recall_at_3": 0.3333,
+          "recall_at_5": 0.3333,
+          "recall_at_10": 0.5,
+          "ndcg_at_1": 1.0,
+          "ndcg_at_3": 0.7039
+        },
+        {
+          "fixture_id": "txt-002",
+          "query": "How do I load training data efficiently without bottlenecking the GPU?",
+          "recall_at_1": 0.0,
+          "recall_at_3": 1.0,
+          "recall_at_5": 1.0,
+          "recall_at_10": 1.0,
+          "ndcg_at_1": 0.0,
+          "ndcg_at_3": 0.6309
         }
       ]
     }

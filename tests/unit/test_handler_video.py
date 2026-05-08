@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from omnivore.pipeline.handlers.video import VideoHandler, _extract_audio
 from omnivore.pipeline.models import TimePosition
@@ -12,10 +12,14 @@ from omnivore.pipeline.models import TimePosition
 # Helpers (reuse pattern from test_handler_audio)
 # ---------------------------------------------------------------------------
 
-def _make_ctx(doc_id: uuid.UUID | None = None) -> MagicMock:
+def _make_ctx(doc_id: uuid.UUID | None = None, data: bytes = b"fake-video-bytes") -> MagicMock:
     ctx = MagicMock()
     ctx.document_id = doc_id or uuid.uuid4()
-    ctx.read_blob = AsyncMock(return_value=b"fake-video-bytes")
+
+    async def _stream_blob():
+        yield data
+
+    ctx.stream_blob = _stream_blob
     return ctx
 
 
@@ -185,6 +189,36 @@ def test_extract_audio_passes_correct_ffmpeg_flags():
     assert "16000" in cmd
     assert "-ac" in cmd
     assert "1" in cmd
+
+
+# ---------------------------------------------------------------------------
+# Streaming (Phase 2c — stream_blob replaces read_blob + size guard)
+# ---------------------------------------------------------------------------
+
+async def test_video_handler_streams_large_blob_in_chunks():
+    """Handler assembles multi-chunk stream into the correct transcript."""
+    chunk_a = b"fake-" * 100
+    chunk_b = b"video-bytes" * 50
+
+    async def _chunked_stream():
+        yield chunk_a
+        yield chunk_b
+
+    ctx = MagicMock()
+    ctx.document_id = uuid.uuid4()
+    ctx.stream_blob = _chunked_stream
+
+    segs = [_make_segment(" Hello.", 0.0, 1.0)]
+    model = _stub_model(segs, _make_info())
+
+    with (
+        patch.object(VideoHandler, "_get_model", return_value=model),
+        patch("omnivore.pipeline.handlers.video._extract_audio"),
+    ):
+        result = await VideoHandler().extract(_make_blob(), ctx)
+
+    assert len(result.fragments) == 1
+    assert result.fragments[0].content == "Hello."
 
 
 # ---------------------------------------------------------------------------

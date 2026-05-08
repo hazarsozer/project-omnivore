@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from omnivore.pipeline.handlers.audio import AudioHandler
 from omnivore.pipeline.models import TimePosition
@@ -12,10 +12,14 @@ from omnivore.pipeline.models import TimePosition
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ctx(doc_id: uuid.UUID | None = None) -> MagicMock:
+def _make_ctx(doc_id: uuid.UUID | None = None, data: bytes = b"fake-audio-bytes") -> MagicMock:
     ctx = MagicMock()
     ctx.document_id = doc_id or uuid.uuid4()
-    ctx.read_blob = AsyncMock(return_value=b"fake-audio-bytes")
+
+    async def _stream_blob():
+        yield data
+
+    ctx.stream_blob = _stream_blob
     return ctx
 
 
@@ -148,6 +152,33 @@ async def test_audio_handler_whitespace_only_segments_skipped():
 
     assert len(result.fragments) == 1
     assert result.fragments[0].content == "Real text."
+
+
+# ---------------------------------------------------------------------------
+# Streaming (Phase 2c — stream_blob replaces read_blob + size guard)
+# ---------------------------------------------------------------------------
+
+async def test_audio_handler_streams_large_blob_in_chunks():
+    """Handler assembles multi-chunk stream into the correct transcript."""
+    chunk_a = b"fake-" * 100
+    chunk_b = b"audio-bytes" * 50
+
+    async def _chunked_stream():
+        yield chunk_a
+        yield chunk_b
+
+    ctx = MagicMock()
+    ctx.document_id = uuid.uuid4()
+    ctx.stream_blob = _chunked_stream
+
+    segs = [_make_segment(" Hello.", 0.0, 1.0)]
+    model = _stub_model(segs, _make_transcribe_info())
+
+    with patch.object(AudioHandler, "_get_model", return_value=model):
+        result = await AudioHandler().extract(_make_blob(), ctx)
+
+    assert len(result.fragments) == 1
+    assert result.fragments[0].content == "Hello."
 
 
 # ---------------------------------------------------------------------------
