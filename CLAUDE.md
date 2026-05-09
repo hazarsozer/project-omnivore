@@ -110,7 +110,7 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 
 - ~~Audio/video blob streaming~~ — Done (Phase 2c). `IngestContext.stream_blob()` implemented; audio/video handlers stream to disk instead of loading into RAM.
 - ~~Image OCR multilingual support~~ — Done (Phase 2c). Per-request `ocr_languages` override via `ctx.config`, EasyOCR allowlist, LRU-bounded reader cache.
-- **Phase 2c follow-ups (start of next session):** (P0) end-to-end `upload → worker → search` test — the queue-name bug survived three phases because no test exercised the full path; (P1) integration test for `stream_blob()` against real MinIO; (P1) `POST /v1/documents/{id}/retry` to consume DLQ retry payloads; (P2) GPU queue backpressure; (P2) stronger idempotency for in-progress states; (P3) bakeoff fixture cleanup. See [`docs/phase2c-audit.md`](docs/phase2c-audit.md) §Follow-up work.
+- **Phase 2c follow-ups:** ~~(P0) end-to-end `upload → worker → search` test~~ — Done (2026-05-09, `tests/integration/test_e2e_pipeline.py`, 8 tests). Key learnings: `ASGITransport` does not fire the ASGI lifespan; must manually set `app.state.arq_pool` and call `registry.discover()` in integration test setup. Cleanup needs a fresh engine to avoid "Future attached to a different loop". (P1) integration test for `stream_blob()` against real MinIO; (P1) `POST /v1/documents/{id}/retry` to consume DLQ retry payloads; (P2) GPU queue backpressure; (P2) stronger idempotency for in-progress states; (P3) bakeoff fixture cleanup. See [`docs/phase2c-audit.md`](docs/phase2c-audit.md) §Follow-up work.
 - LLM summarization, NER, sentiment — Phase 3
 - Routing policy engine (jsonlogic) — Phase 3
 - Multi-tenant auth (JWT, API keys, RLS) — Phase 4
