@@ -110,7 +110,11 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 
 - ~~Audio/video blob streaming~~ — Done (Phase 2c). `IngestContext.stream_blob()` implemented; audio/video handlers stream to disk instead of loading into RAM.
 - ~~Image OCR multilingual support~~ — Done (Phase 2c). Per-request `ocr_languages` override via `ctx.config`, EasyOCR allowlist, LRU-bounded reader cache.
-- **Phase 2c follow-ups:** ~~(P0) end-to-end `upload → worker → search` test~~ — Done (2026-05-09, `tests/integration/test_e2e_pipeline.py`, 8 tests). Key learnings: `ASGITransport` does not fire the ASGI lifespan; must manually set `app.state.arq_pool` and call `registry.discover()` in integration test setup. Cleanup needs a fresh engine to avoid "Future attached to a different loop". ~~(P1) integration test for `stream_blob()` against real MinIO~~ — Done (2026-05-09, `tests/integration/test_stream_blob.py`, 6 tests); ~~(P1) `POST /v1/documents/{id}/retry` to consume DLQ retry payloads~~ — Done (2026-05-09, `src/omnivore/api/routes/documents.py`, 8 unit tests); ~~(P2) GPU queue backpressure~~ — Done (2026-05-09); ~~(P2) stronger idempotency for in-progress states~~ — Done (2026-05-09); ~~(P3) bakeoff fixture cleanup~~ — Done (2026-05-09, md-003 WAL section extended to ~350 tokens so it gets its own chunk, txt-001 extended to 2 chunks with 5 distinct queries). See [`docs/phase2c-audit.md`](docs/phase2c-audit.md) §Follow-up work.
+- **Phase 2 closed (2026-05-09).** All six P0–P3 follow-up items shipped + Opus audit closure (H-P1b retry outbox, M-P0/M-P1b/M-P2a hardening). 225 tests passing. See [`docs/phase2c-audit.md`](docs/phase2c-audit.md). Key integration-test learnings (apply to all future tests against the running app): `ASGITransport` does NOT fire the ASGI lifespan, so manually set `app.state.arq_pool` and call `registry.discover()`; cleanup must create a fresh `create_async_engine()` to avoid "Future attached to a different loop" from cross-`asyncio.run()` connection reuse.
+
+- **Deferred to Phase 3 (LOW severity, theoretical):**
+  - **L-1**: Retry endpoint `retry_payload.get("task")` will raise `AttributeError` → 500 if `doc.error.retry_payload` is somehow stored as a non-dict. `_fail_document` always writes a dict, so this is theoretical, but adding `if not isinstance(retry_payload, dict)` would harden it.
+  - **L-2**: `tests/integration/test_e2e_pipeline.py::test_worker_queue_name_matches_api_pool_default` uses the literal `"arq:queue"` instead of `arq.connections.ArqRedis.default_queue_name`. If arq ever changes its default in a future version, the test would silently pass while a new wiring bug emerges. (Mitigated: `test_job_lands_in_arq_queue` does the empirical round-trip.)
 - LLM summarization, NER, sentiment — Phase 3
 - Routing policy engine (jsonlogic) — Phase 3
 - Multi-tenant auth (JWT, API keys, RLS) — Phase 4
@@ -182,7 +186,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 2c — robustness & multilingual)
+## Phase roadmap (current: Phase 3 — enrichment, ready to start)
 
 | Phase | What | Status |
 |---|---|---|
@@ -191,6 +195,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 2 — Embeddings + hybrid search | BGE-base-en-v1.5 (local) + pgvector + BM25/vector/RRF endpoint | **Done** — 125 unit tests, 6 E2E tests, 5/5 eval fixtures. Audit closed 2026-05-07. See [`docs/phase2-audit.md`](docs/phase2-audit.md). |
 | 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR (EasyOCR), GPU worker queue, embedding bakeoff | **Done** — 176 unit tests, 6 E2E. Bakeoff: BGE-M3 +18.7% recall@1 vs BGE-base. Audit closed 2026-05-07. See [`docs/phase2b-audit.md`](docs/phase2b-audit.md). |
 | 2c — Robustness & multilingual | `IngestContext.stream_blob()`, multilingual OCR (per-request lang override + LRU-bounded reader cache + allowlist), expanded eval corpus (53 chunks / 39 queries), backpressure (HTTP 429), idempotency guard, DLQ retry payload, queue-name alignment fix | **Done** — 164 unit tests, 6 E2E. Bakeoff verdict: bge-base ≈ bge-m3 (not significant, t=0.514). Pre-existing CPU queue-name mismatch fixed. Audit closed 2026-05-08. |
+| 2c — Final closure | All six P0–P3 follow-ups: E2E pipeline test (P0), `stream_blob()` integration test (P1), `POST /v1/documents/{id}/retry` (P1), GPU queue backpressure (P2), atomic claim in `_run_ingest` for stronger idempotency (P2), bakeoff fixture cleanup — md-003 WAL + txt-001 multi-chunk (P3). Opus audit found H-P1b (retry endpoint orphaned docs on Redis failure); fixed with transactional outbox. Three M-level hardening fixes: queue-name regression guard, retry task allowlist, `GPU_QUEUE_NAME` constant centralized. | **Done** — 225 unit + integration tests passing, ruff clean, eval harness 8/9 (txt-002 67% pre-existing). Phase 2 fully closed 2026-05-09. |
 | 3 — Enrichment | LLM summary, NER, routing policy | — |
 | 4 — Multi-tenant | API keys, JWT, rate limiting, RLS | — |
 | 5 — Observability | OTel, Prometheus, Grafana, Loki | — |
