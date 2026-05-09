@@ -1,13 +1,13 @@
 {
   "fixture_id": "txt-001",
   "format": "txt",
-  "description": "Plain text with three sections separated by double newlines",
+  "description": "Plain text with five sections covering Omnivore architecture, handlers, chunking, and setup",
   "expected_handler": "text",
   "expected_mime": "text/plain",
-  "expected_fragment_count_min": 3,
-  "expected_fragment_count_max": 12,
-  "expected_chunk_count_min": 1,
-  "expected_chunk_count_max": 5,
+  "expected_fragment_count_min": 5,
+  "expected_fragment_count_max": 20,
+  "expected_chunk_count_min": 2,
+  "expected_chunk_count_max": 6,
   "expected_table_count": 0,
   "difficulty": "easy",
   "languages": ["en"],
@@ -24,6 +24,14 @@
     {
       "query": "What is Omnivore?",
       "relevant_content_substrings": ["universal document ingestion", "structured intelligence"]
+    },
+    {
+      "query": "How does audio transcription work in the pipeline?",
+      "relevant_content_substrings": ["faster-whisper", "transcribe", "Audio"]
+    },
+    {
+      "query": "How are documents split into searchable pieces?",
+      "relevant_content_substrings": ["chunk", "token", "heading"]
     }
   ]
 }

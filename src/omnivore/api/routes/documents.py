@@ -18,6 +18,7 @@ from omnivore.config import get_settings
 from omnivore.constants import DEFAULT_TENANT_ID
 from omnivore.db.models import Document, Outbox
 from omnivore.db.session import get_db
+from omnivore.pipeline.registry import registry
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = structlog.get_logger(__name__)
@@ -71,9 +72,8 @@ async def upload_document(
             ).model_dump(),
         )
 
-    # Backpressure: reject new uploads when the CPU queue is over the depth limit.
-    # Read the queue name from the pool itself so this stays in sync with the worker
-    # (the worker's WorkerSettings.queue_name must match pool.default_queue_name).
+    # Backpressure: reject new uploads when either the CPU or GPU queue is over its limit.
+    # CPU queue name comes from the pool itself so it stays in sync with the worker.
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
         queue_depth = await pool.zcard(pool.default_queue_name)
@@ -82,6 +82,16 @@ async def upload_document(
                 status_code=429,
                 detail=f"Queue full ({queue_depth} pending jobs). Retry after some jobs complete.",
             )
+
+        # GPU backpressure: only checked when the file would route to the GPU worker.
+        handler_cls = registry.resolve(detected_mime)
+        if handler_cls is not None and getattr(handler_cls, "cost_class", None) == "gpu":
+            gpu_depth = await pool.zcard("arq:gpu")
+            if gpu_depth >= settings.MAX_GPU_QUEUE_DEPTH:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"GPU queue full ({gpu_depth} pending jobs). Retry after some jobs complete.",
+                )
 
     document_id = uuid.uuid4()
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"

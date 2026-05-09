@@ -71,6 +71,7 @@ def _mock_settings() -> MagicMock:
     s = MagicMock()
     s.MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
     s.MAX_QUEUE_DEPTH = 100
+    s.MAX_GPU_QUEUE_DEPTH = 20
     s.MINIO_ENDPOINT = "localhost:9000"
     s.MINIO_SECURE = False
     s.MINIO_ACCESS_KEY = "minioadmin"
@@ -561,6 +562,86 @@ async def test_upload_proceeds_when_queue_below_limit():
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+    ):
+        resp = await upload_document(request=req, file=upload, db=db)
+
+    assert resp.status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# GPU backpressure (Phase 2c P2)
+# ---------------------------------------------------------------------------
+
+def _make_request_with_gpu_depth(cpu_depth: int = 0, gpu_depth: int = 0) -> MagicMock:
+    arq_pool = AsyncMock()
+    arq_pool.default_queue_name = "arq:queue"
+    arq_pool.zcard = AsyncMock(side_effect=lambda key: {
+        "arq:queue": cpu_depth,
+        "arq:gpu": gpu_depth,
+    }.get(key, 0))
+    req = MagicMock()
+    req.app.state.arq_pool = arq_pool
+    return req
+
+
+async def test_upload_returns_429_when_gpu_queue_full():
+    """GPU file upload rejected with 429 when arq:gpu depth >= MAX_GPU_QUEUE_DEPTH."""
+    db = _make_db(scalar_return=None)
+    req = _make_request_with_gpu_depth(cpu_depth=0, gpu_depth=20)  # == MAX_GPU_QUEUE_DEPTH
+    upload = _make_upload_mock(b"fake audio data", filename="audio.mp3")
+    mock_session, _ = _mock_s3_session()
+
+    gpu_handler = MagicMock()
+    gpu_handler.cost_class = "gpu"
+
+    with (
+        patch("omnivore.api.routes.documents.magic.from_buffer", return_value="audio/mpeg"),
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+        patch("omnivore.api.routes.documents.registry.resolve", return_value=gpu_handler),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await upload_document(request=req, file=upload, db=db)
+
+    assert exc_info.value.status_code == 429
+
+
+async def test_upload_proceeds_when_gpu_queue_below_limit():
+    """GPU file upload accepted when arq:gpu depth < MAX_GPU_QUEUE_DEPTH."""
+    db = _make_db(scalar_return=None)
+    req = _make_request_with_gpu_depth(cpu_depth=0, gpu_depth=19)  # one below limit
+    upload = _make_upload_mock(b"fake audio data", filename="audio.mp3")
+    mock_session, _ = _mock_s3_session()
+
+    gpu_handler = MagicMock()
+    gpu_handler.cost_class = "gpu"
+
+    with (
+        patch("omnivore.api.routes.documents.magic.from_buffer", return_value="audio/mpeg"),
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+        patch("omnivore.api.routes.documents.registry.resolve", return_value=gpu_handler),
+    ):
+        resp = await upload_document(request=req, file=upload, db=db)
+
+    assert resp.status_code == 202
+
+
+async def test_cpu_file_not_checked_against_gpu_queue():
+    """Non-GPU file upload is not rejected even when the GPU queue is completely full."""
+    db = _make_db(scalar_return=None)
+    req = _make_request_with_gpu_depth(cpu_depth=0, gpu_depth=999)  # GPU queue swamped
+    upload = _make_upload_mock(b"plain text", filename="doc.txt")
+    mock_session, _ = _mock_s3_session()
+
+    cpu_handler = MagicMock()
+    cpu_handler.cost_class = "cpu"
+
+    with (
+        patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+        patch("omnivore.api.routes.documents.registry.resolve", return_value=cpu_handler),
     ):
         resp = await upload_document(request=req, file=upload, db=db)
 

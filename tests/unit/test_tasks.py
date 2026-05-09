@@ -69,13 +69,19 @@ def _make_gpu_handler(result: ExtractionResult) -> type:
     return FakeGpuHandler
 
 
-def _make_session_ctx(doc=None):
+def _make_session_ctx(doc=None, claim_succeeds: bool = True):
     db = AsyncMock()
     db.get = AsyncMock(return_value=doc)
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
+
+    # Mock db.execute(...).fetchone() for the atomic claim in _run_ingest.
+    claim_row = MagicMock() if claim_succeeds else None
+    execute_result = MagicMock()
+    execute_result.fetchone = MagicMock(return_value=claim_row)
+    db.execute = AsyncMock(return_value=execute_result)
 
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=db)
@@ -624,6 +630,107 @@ async def test_ingest_dispatch_already_failed_returns_early():
 
     assert out["status"] == "failed"
     assert out["reason"] == "already_processed"
+
+
+async def test_ingest_dispatch_extracting_returns_early():
+    """Duplicate job arriving while another worker is mid-extraction bails out."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "extracting"
+    session_local, db = _make_session_ctx(doc)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "extracting"
+    assert out["reason"] == "already_processed"
+    db.commit.assert_not_called()
+
+
+async def test_ingest_dispatch_enriching_returns_early():
+    """Duplicate job arriving while another worker is embedding also bails out."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "enriching"
+    session_local, db = _make_session_ctx(doc)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["status"] == "enriching"
+    assert out["reason"] == "already_processed"
+    db.commit.assert_not_called()
+
+
+async def test_ingest_dispatch_claim_lost_returns_already_claimed():
+    """If the atomic UPDATE finds 0 rows (another worker beat us), bail out cleanly."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)  # status="queued"
+    # claim_succeeds=False → fetchone() returns None → claim lost
+    session_local, db = _make_session_ctx(doc, claim_succeeds=False)
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            _arq_ctx(),
+            document_id=str(doc_id),
+            mime="application/fake",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["reason"] == "already_claimed"
+    # No extraction commit after the failed claim
+    db.commit.assert_not_called()
+
+
+async def test_ingest_dispatch_gpu_routing_skipped_if_already_routing():
+    """Outbox relay re-publishes ingest_dispatch for a GPU doc already in 'routing' — skip."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "routing"
+    session_local, db = _make_session_ctx(doc)
+    arq_ctx = _arq_ctx()
+
+    with (
+        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(_empty_result(doc_id))),
+    ):
+        out = await ingest_dispatch(
+            arq_ctx,
+            document_id=str(doc_id),
+            mime="audio/mpeg",
+            size=1000,
+            tenant_id=str(_TENANT_ID),
+            config_snapshot={},
+        )
+
+    assert out["reason"] == "already_processed"
+    # Must NOT enqueue another GPU job
+    arq_ctx["redis"].enqueue_job.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

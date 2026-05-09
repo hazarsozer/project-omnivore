@@ -24,7 +24,8 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_SIZE_BYTES: int = 2_147_483_648
     IMAGE_OCR_LANGUAGES: list[str] = ["en"]  # default language list for EasyOCR
-    MAX_QUEUE_DEPTH: int = 100  # reject new uploads (HTTP 429) when CPU queue exceeds this
+    MAX_QUEUE_DEPTH: int = 100     # reject new uploads (HTTP 429) when CPU queue exceeds this
+    MAX_GPU_QUEUE_DEPTH: int = 20  # same guard for GPU queue (audio/video/image; max_jobs=2)
 
 
 @lru_cache

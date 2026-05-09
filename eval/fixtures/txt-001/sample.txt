@@ -1,16 +1,45 @@
 Omnivore Project Overview
 
 Omnivore is a universal document ingestion pipeline that accepts files in many formats.
-It extracts structured intelligence from documents and stores results in PostgreSQL.
+It extracts structured intelligence from documents and stores results in PostgreSQL with pgvector.
+The pipeline supports PDF, DOCX, Markdown, HTML, CSV, Excel, audio, video, and image files out of the box.
+Files are uploaded through a REST API, stored in object storage, and processed asynchronously by worker processes.
+The extracted text is chunked, embedded, and indexed for both keyword and semantic search.
 
 Architecture
 
-The system is built on FastAPI for the REST API layer.
-ARQ handles asynchronous job processing through Redis queues.
-PostgreSQL with pgvector stores all extracted data and enables semantic search.
+The system is built on FastAPI for the REST API layer and uses async SQLAlchemy for database access.
+ARQ handles asynchronous job processing through Redis queues, separating CPU and GPU workloads.
+PostgreSQL with the pgvector extension stores all extracted chunks and their dense vector embeddings.
+MinIO provides S3-compatible object storage for raw uploaded files before and during processing.
+The API and worker communicate through a transactional outbox pattern to guarantee at-least-once delivery.
+When a file is uploaded the API writes a Document row and an Outbox row atomically before enqueuing the job.
+
+Handlers and Extraction
+
+Each file format is handled by a dedicated handler registered via Python entry points at install time.
+Handlers implement a common protocol: they receive a BlobRef and an IngestContext object.
+Text and Markdown handlers parse structure from headings and paragraphs to produce typed block objects.
+PDF handlers use PyMuPDF to extract text with layout preservation and table detection.
+Audio and video handlers stream the file to disk using faster-whisper for speech-to-text transcription.
+Image handlers apply EasyOCR with per-request language configuration to extract printed or handwritten text.
+All handlers return an ExtractionResult containing blocks, fragments, structured tables, and metadata.
+
+Chunking and Embeddings
+
+After extraction, the structure-first chunker splits content into overlapping token windows of up to 512 tokens.
+Heading boundaries are never split across chunks; token overflow only applies within a section.
+Each chunk carries metadata including heading path, source block IDs, position, and table lineage.
+Chunks are embedded using a local BGE-base-en-v1.5 model served in-process without an external API.
+Embeddings are stored as 768-dimensional vectors in a pgvector HNSW index for approximate nearest-neighbour search.
+BM25 full-text search and vector similarity search results are combined using Reciprocal Rank Fusion.
 
 Getting Started
 
-Install the package manager uv and synchronize dependencies.
-Configure your environment by copying .env.example to .env.
-Start the infrastructure using docker compose and run database migrations.
+Install the package manager uv and synchronize project dependencies with uv sync.
+Copy .env.example to .env and configure the database, Redis, and MinIO connection strings.
+Start the infrastructure services using docker compose up -d postgres redis minio.
+Apply database migrations with uv run alembic upgrade head to create the schema.
+Start the CPU worker with uv run python -m omnivore.worker.main in a separate terminal.
+Upload a document with curl or the OpenAPI UI and poll GET /v1/documents/{id} until status is indexed.
+Search the indexed content using POST /v1/search with a query string and preferred search mode.

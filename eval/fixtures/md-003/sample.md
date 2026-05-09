@@ -92,11 +92,33 @@ transaction pooling mode — the session may be reused by a different client.
 The WAL (Write-Ahead Log) is an append-only record of every change to the database.
 Changes are written to WAL before they are applied to the heap, guaranteeing durability:
 if the server crashes mid-write, recovery replays WAL from the last checkpoint.
+WAL files live under `pg_wal/` and are named with a 24-character hexadecimal segment
+identifier. Use `pg_walfile_name(pg_current_wal_lsn())` to find the current WAL file,
+and `pg_waldump` to inspect its contents for debugging.
 
 `fsync = on` is the default and must not be disabled in production. Disabling it makes
 writes faster but sacrifices durability — a crash can corrupt the database cluster
 entirely. Use `synchronous_commit = off` for individual transactions that can tolerate
 a small replication lag while keeping `fsync` enabled globally.
+
+Checkpoints flush all dirty buffers to disk and write a checkpoint record to WAL.
+PostgreSQL performs automatic checkpoints whenever `max_wal_size` is reached or
+`checkpoint_timeout` seconds elapse (default 5 minutes). Aggressive writes can trigger
+frequent checkpoints — monitor `pg_stat_bgwriter.checkpoints_timed` versus
+`checkpoints_req` to detect checkpoint pressure. Spreading checkpoints with
+`checkpoint_completion_target = 0.9` reduces I/O spikes.
+
+`wal_level` controls how much information is written to WAL. The default is `replica`,
+which supports streaming replication and point-in-time recovery (PITR). Set
+`wal_level = logical` to enable logical decoding and replication slots for CDC
+(change data capture) tools. The `minimal` level writes less WAL but does not support
+replication — suitable only for standalone instances where PITR is not required.
+
+`wal_buffers` (default 1/32 of `shared_buffers`, capped at 16 MB) controls the
+amount of WAL data held in shared memory before being flushed. For write-heavy
+workloads, increasing `wal_buffers` to 64 MB can reduce flush frequency and improve
+throughput. WAL compression (`wal_compression = on`) reduces WAL volume at the cost
+of CPU, which is usually worthwhile on spinning disks or expensive network replication.
 
 ## Partitioning Large Tables
 

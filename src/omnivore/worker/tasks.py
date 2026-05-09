@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from omnivore.config import get_settings
 from omnivore.db.models import Chunk as ChunkRow
@@ -48,6 +48,15 @@ async def ingest_dispatch(
         async with AsyncSessionLocal() as db:
             doc = await db.get(Document, uuid.UUID(document_id))
             if doc:
+                # Idempotency: if the doc is already routing/processing/done,
+                # the outbox relay replayed this CPU job — do not re-enqueue.
+                if doc.status != "queued":
+                    logger.info(
+                        "ingest.dispatch.routing_skipped",
+                        document_id=document_id,
+                        status=doc.status,
+                    )
+                    return {"status": doc.status, "document_id": document_id, "reason": "already_processed"}
                 doc.status = "routing"
                 await db.commit()
         await ctx["redis"].enqueue_job(
@@ -114,10 +123,18 @@ async def _run_ingest(
             logger.error("ingest.dispatch.doc_not_found", document_id=document_id)
             return {"status": "error", "reason": "document_not_found"}
 
-        # Idempotency: if the document reached a terminal state already (duplicate enqueue
-        # from outbox relay or manual retry), skip re-processing.
-        if doc.status in ("indexed", "failed"):
-            logger.info("ingest.dispatch.already_processed", document_id=document_id, status=doc.status)
+        # Idempotency — covers two scenarios:
+        # 1. Terminal states (indexed, failed): outbox relay / manual retry replays a
+        #    job that already finished — skip cleanly.
+        # 2. In-progress states (extracting, enriching): a duplicate job arrived while
+        #    a worker is already mid-extraction — bail out without creating duplicate chunks.
+        # "routing" and "queued" are valid entry states and fall through to the claim below.
+        if doc.status in ("indexed", "failed", "extracting", "enriching"):
+            logger.info(
+                "ingest.dispatch.already_processing_or_done",
+                document_id=document_id,
+                status=doc.status,
+            )
             return {"status": doc.status, "document_id": document_id, "reason": "already_processed"}
 
         handler = handler_cls()
@@ -132,9 +149,23 @@ async def _run_ingest(
             _settings=settings,
         )
 
-        doc.status = "extracting"
-        doc.handler_name = handler.name
-        doc.handler_version = handler.version
+        # Atomic claim: only one worker can transition from queued/routing → extracting.
+        # If two workers race on the same document, the second UPDATE finds 0 matching rows
+        # (status already changed by the first) and bails out without producing duplicate chunks.
+        claim = await db.execute(
+            update(Document)
+            .where(Document.id == doc_id)
+            .where(Document.status.in_(["queued", "routing"]))
+            .values(
+                status="extracting",
+                handler_name=handler.name,
+                handler_version=handler.version,
+            )
+            .returning(Document.id)
+        )
+        if claim.fetchone() is None:
+            logger.info("ingest.dispatch.claim_lost", document_id=document_id)
+            return {"status": "extracting", "document_id": document_id, "reason": "already_claimed"}
         await db.commit()
 
         try:
