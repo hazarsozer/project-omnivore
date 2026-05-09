@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnivore.api.schemas import APIResponse
 from omnivore.config import get_settings
-from omnivore.constants import DEFAULT_TENANT_ID
+from omnivore.constants import DEFAULT_TENANT_ID, GPU_QUEUE_NAME
 from omnivore.db.models import Document, Outbox
 from omnivore.db.session import get_db
 from omnivore.pipeline.registry import registry
@@ -86,7 +86,7 @@ async def upload_document(
         # GPU backpressure: only checked when the file would route to the GPU worker.
         handler_cls = registry.resolve(detected_mime)
         if handler_cls is not None and getattr(handler_cls, "cost_class", None) == "gpu":
-            gpu_depth = await pool.zcard("arq:gpu")
+            gpu_depth = await pool.zcard(GPU_QUEUE_NAME)
             if gpu_depth >= settings.MAX_GPU_QUEUE_DEPTH:
                 raise HTTPException(
                     status_code=429,
@@ -229,6 +229,9 @@ async def list_documents(
     )
 
 
+_ALLOWED_RETRY_TASKS = frozenset({"ingest_dispatch", "gpu_ingest_dispatch"})
+
+
 @router.post("/{document_id}/retry", status_code=202)
 async def retry_document(
     document_id: uuid.UUID,
@@ -252,14 +255,34 @@ async def retry_document(
             detail="No retry payload available — document failed before a job was enqueued",
         )
 
+    # Validate payload structure before touching the DB.
+    task_name = retry_payload.get("task")
+    task_kwargs = retry_payload.get("kwargs")
+    if task_name not in _ALLOWED_RETRY_TASKS or not isinstance(task_kwargs, dict):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Malformed retry_payload: task must be one of {sorted(_ALLOWED_RETRY_TASKS)}",
+        )
+
+    # Reset status and write an Outbox row atomically so the outbox_relay cron
+    # can re-enqueue on transient Redis failures — same safety net as the upload path.
     doc.status = "queued"
     doc.error = None
+    outbox_entry = Outbox(
+        aggregate_id=document_id,
+        event_type="ingest.retry",
+        payload=retry_payload,
+    )
+    db.add(outbox_entry)
     await db.commit()
+    await db.refresh(outbox_entry)
 
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
         try:
-            await pool.enqueue_job(retry_payload["task"], **retry_payload["kwargs"])
+            await pool.enqueue_job(task_name, **task_kwargs)
+            outbox_entry.published_at = datetime.now(UTC)
+            await db.commit()
         except Exception:
             logger.warning("arq.retry_enqueue.failed", document_id=str(document_id))
     else:

@@ -5,6 +5,7 @@ import structlog
 from arq.connections import RedisSettings
 
 from omnivore.config import get_settings
+from omnivore.constants import GPU_QUEUE_NAME
 from omnivore.pipeline.registry import registry
 from omnivore.worker.tasks import gpu_ingest_dispatch, on_shutdown
 
@@ -23,7 +24,7 @@ class GpuWorkerSettings:
     on_startup = _gpu_on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().REDIS_URL)
-    queue_name = "arq:gpu"
+    queue_name = GPU_QUEUE_NAME
     max_jobs = 2
     job_timeout = 7200
     keep_result = 86400

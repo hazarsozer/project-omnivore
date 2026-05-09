@@ -7,6 +7,7 @@ import structlog
 from sqlalchemy import select, update
 
 from omnivore.config import get_settings
+from omnivore.constants import GPU_QUEUE_NAME
 from omnivore.db.models import Chunk as ChunkRow
 from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox
 from omnivore.db.session import AsyncSessionLocal
@@ -61,7 +62,7 @@ async def ingest_dispatch(
                 await db.commit()
         await ctx["redis"].enqueue_job(
             "gpu_ingest_dispatch",
-            _queue_name="arq:gpu",
+            _queue_name=GPU_QUEUE_NAME,
             document_id=document_id,
             mime=mime,
             size=size,

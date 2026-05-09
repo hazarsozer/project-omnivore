@@ -207,6 +207,16 @@ class TestE2EPipeline:
             "or the arq pool was not initialised on app.state."
         )
 
+    def test_worker_queue_name_matches_api_pool_default(self, pipeline_results):
+        """WorkerSettings.queue_name must equal the ArqRedis pool default ('arq:queue').
+        This exact mismatch was the Phase 2c C1 bug — it silently dropped every job
+        for three phases because no test checked both sides of the wiring."""
+        from omnivore.worker.main import WorkerSettings
+        assert WorkerSettings.queue_name == "arq:queue", (
+            f"WorkerSettings.queue_name={WorkerSettings.queue_name!r} "
+            "does not match the API pool default 'arq:queue'."
+        )
+
     def test_ingest_dispatch_returns_indexed(self, pipeline_results):
         result = pipeline_results["ingest_result"]
         assert result["status"] == "indexed", f"ingest_dispatch returned: {result}"

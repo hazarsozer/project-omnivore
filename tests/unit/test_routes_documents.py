@@ -536,8 +536,21 @@ async def test_retry_document_no_arq_pool_still_queues_in_db():
     assert doc.status == "queued"
 
 
-async def test_retry_document_arq_enqueue_failure_does_not_raise():
-    """ARQ enqueue failure is swallowed — the status is already reset in DB."""
+async def test_retry_document_writes_outbox_row():
+    """Status reset and Outbox row are committed atomically so outbox_relay can replay."""
+    doc = _make_failed_doc()
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=AsyncMock())
+
+    await retry_document(document_id=doc.id, request=req, db=db)
+
+    # db.add() must be called at least once (for the Outbox row)
+    db.add.assert_called()
+
+
+async def test_retry_document_arq_enqueue_failure_outbox_provides_safety_net():
+    """On Redis failure the doc stays queued and the outbox row (unpublished) remains
+    for the outbox_relay cron to pick up — same safety net as the upload path."""
     doc = _make_failed_doc()
     arq_pool = AsyncMock()
     arq_pool.enqueue_job = AsyncMock(side_effect=ConnectionError("redis down"))
@@ -548,6 +561,22 @@ async def test_retry_document_arq_enqueue_failure_does_not_raise():
 
     assert resp.status_code == 202
     assert doc.status == "queued"
+    # Outbox row was written (db.add called for the Outbox entry)
+    db.add.assert_called()
+
+
+async def test_retry_document_422_on_malformed_payload():
+    """Malformed retry_payload (unknown task name) raises 422 before touching the DB."""
+    doc = _make_failed_doc()
+    doc.error = {"reason": "crash", "retry_payload": {"task": "arbitrary_task", "kwargs": {}}}
+    db = _make_db(get_return=doc)
+    req = _make_request()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert exc_info.value.status_code == 422
+    db.commit.assert_not_called()  # DB must not be touched before validation
 
 
 async def test_upload_proceeds_when_queue_below_limit():
