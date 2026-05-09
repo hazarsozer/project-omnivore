@@ -219,6 +219,56 @@ async def list_documents(
     )
 
 
+@router.post("/{document_id}/retry", status_code=202)
+async def retry_document(
+    document_id: uuid.UUID,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> JSONResponse:
+    doc = await db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.status != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Document is not in failed state (current: {doc.status})",
+        )
+
+    retry_payload = (doc.error or {}).get("retry_payload")
+    if not retry_payload:
+        raise HTTPException(
+            status_code=404,
+            detail="No retry payload available — document failed before a job was enqueued",
+        )
+
+    doc.status = "queued"
+    doc.error = None
+    await db.commit()
+
+    pool = getattr(request.app.state, "arq_pool", None)
+    if pool:
+        try:
+            await pool.enqueue_job(retry_payload["task"], **retry_payload["kwargs"])
+        except Exception:
+            logger.warning("arq.retry_enqueue.failed", document_id=str(document_id))
+    else:
+        logger.warning("arq_pool.not_initialized", document_id=str(document_id))
+
+    logger.info("document.retry_queued", document_id=str(document_id))
+    return JSONResponse(
+        status_code=202,
+        content=APIResponse(
+            success=True,
+            data={
+                "document_id": str(document_id),
+                "status": "queued",
+                "poll_url": f"/v1/documents/{document_id}",
+            },
+        ).model_dump(),
+    )
+
+
 async def _ensure_bucket(s3, bucket: str) -> None:
     try:
         await s3.head_bucket(Bucket=bucket)

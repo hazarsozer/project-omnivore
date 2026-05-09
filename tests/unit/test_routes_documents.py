@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from omnivore.api.routes.documents import get_document, list_documents, upload_document
+from omnivore.api.routes.documents import get_document, list_documents, retry_document, upload_document
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -424,6 +424,129 @@ async def test_upload_returns_429_when_queue_full():
             assert False, "Expected HTTPException 429"
         except HTTPException as exc:
             assert exc.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# POST /documents/{id}/retry
+# ---------------------------------------------------------------------------
+
+def _make_failed_doc(doc_id: uuid.UUID | None = None, with_payload: bool = True) -> MagicMock:
+    doc = _make_doc(doc_id)
+    doc.status = "failed"
+    job_kwargs = {
+        "document_id": str(doc.id),
+        "mime": "text/plain",
+        "size": 100,
+        "tenant_id": "00000000-0000-0000-0000-000000000001",
+        "config_snapshot": {},
+    }
+    doc.error = (
+        {"reason": "extraction error", "retry_payload": {"task": "ingest_dispatch", "kwargs": job_kwargs}}
+        if with_payload
+        else {"reason": "crashed before enqueue"}
+    )
+    return doc
+
+
+async def test_retry_document_returns_202_queued():
+    doc_id = uuid.uuid4()
+    doc = _make_failed_doc(doc_id)
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=AsyncMock())
+
+    import json
+    resp = await retry_document(document_id=doc_id, request=req, db=db)
+    body = json.loads(resp.body)
+
+    assert resp.status_code == 202
+    assert body["success"] is True
+    assert body["data"]["status"] == "queued"
+    assert body["data"]["document_id"] == str(doc_id)
+    assert "poll_url" in body["data"]
+
+
+async def test_retry_document_resets_status_to_queued():
+    doc = _make_failed_doc()
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=AsyncMock())
+
+    await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert doc.status == "queued"
+    assert doc.error is None
+    db.commit.assert_awaited()
+
+
+async def test_retry_document_enqueues_job():
+    doc = _make_failed_doc()
+    arq_pool = AsyncMock()
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=arq_pool)
+
+    await retry_document(document_id=doc.id, request=req, db=db)
+
+    arq_pool.enqueue_job.assert_awaited_once()
+    call_args = arq_pool.enqueue_job.call_args
+    assert call_args[0][0] == "ingest_dispatch"
+
+
+async def test_retry_document_404_when_not_found():
+    db = _make_db(get_return=None)
+    req = _make_request()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_document(document_id=uuid.uuid4(), request=req, db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_retry_document_409_when_not_failed():
+    doc = _make_doc()  # status="indexed"
+    db = _make_db(get_return=doc)
+    req = _make_request()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert exc_info.value.status_code == 409
+    assert "indexed" in exc_info.value.detail
+
+
+async def test_retry_document_404_when_no_retry_payload():
+    doc = _make_failed_doc(with_payload=False)
+    db = _make_db(get_return=doc)
+    req = _make_request()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_retry_document_no_arq_pool_still_queues_in_db():
+    """No ARQ pool: document status is reset even if enqueue is skipped."""
+    doc = _make_failed_doc()
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=None)
+
+    resp = await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert resp.status_code == 202
+    assert doc.status == "queued"
+
+
+async def test_retry_document_arq_enqueue_failure_does_not_raise():
+    """ARQ enqueue failure is swallowed — the status is already reset in DB."""
+    doc = _make_failed_doc()
+    arq_pool = AsyncMock()
+    arq_pool.enqueue_job = AsyncMock(side_effect=ConnectionError("redis down"))
+    db = _make_db(get_return=doc)
+    req = _make_request(arq_pool=arq_pool)
+
+    resp = await retry_document(document_id=doc.id, request=req, db=db)
+
+    assert resp.status_code == 202
+    assert doc.status == "queued"
 
 
 async def test_upload_proceeds_when_queue_below_limit():
