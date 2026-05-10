@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnivore.api.schemas import APIResponse
 from omnivore.config import get_settings
 from omnivore.constants import DEFAULT_TENANT_ID, GPU_QUEUE_NAME
-from omnivore.db.models import Document, Outbox
+from omnivore.db.models import Document, Entity, Outbox
 from omnivore.db.session import get_db
 from omnivore.pipeline.registry import registry
 
@@ -191,7 +191,41 @@ async def get_document(
             "indexed_at": doc.indexed_at.isoformat() if doc.indexed_at else None,
             "error": doc.error,
             "metadata": doc.doc_metadata,
+            "summary": doc.doc_metadata.get("summary") if doc.doc_metadata else None,
+            "routing_decision": doc.routing_decision,
         },
+    )
+
+
+@router.get("/{document_id}/entities")
+async def get_document_entities(
+    document_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> APIResponse[list]:
+    doc = await db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    rows = (
+        await db.scalars(
+            select(Entity)
+            .where(Entity.document_id == document_id)
+            .order_by(Entity.label, Entity.normalized)
+        )
+    ).all()
+
+    return APIResponse(
+        success=True,
+        data=[
+            {
+                "label": e.label,
+                "value": e.value,
+                "normalized": e.normalized,
+                "confidence": e.confidence,
+            }
+            for e in rows
+        ],
+        meta={"count": len(rows)},
     )
 
 

@@ -15,6 +15,11 @@ logger = structlog.get_logger(__name__)
 async def _gpu_on_startup(ctx: dict) -> None:
     get_settings()
     registry.discover()
+    from omnivore.pipeline.enrichers.language import _detector, detect_language
+    from omnivore.pipeline.enrichers.ner import _nlp
+    _nlp()
+    _detector()
+    detect_language("warmup text for lingua n-gram loading " * 4)
     # GPU model loading is deferred to first handler invocation — no warmup here.
     logger.info("gpu_worker.startup", handlers=len(registry.all_handlers()))
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import magic
 
+from eval.metrics import compute_chunk_faithfulness
 from omnivore.pipeline.chunker import chunk_result
 from omnivore.pipeline.context import BlobRef
 from omnivore.pipeline.models import ExtractionResult
@@ -67,6 +68,8 @@ async def run_fixture(source_file: Path, meta: dict, registry: HandlerRegistry) 
     total = sum(1 for v in checks.values() if v is not None)
     accuracy = passed / total if total else 1.0
 
+    faithfulness = compute_chunk_faithfulness(chunks, meta.get("queries", []))
+
     return {
         "detected_mime": detected_mime,
         "handler_used": handler.name,
@@ -77,6 +80,7 @@ async def run_fixture(source_file: Path, meta: dict, registry: HandlerRegistry) 
         "warnings": result.warnings,
         "structural_checks": checks,
         "structural_accuracy": accuracy,
+        "chunk_faithfulness": faithfulness,
     }
 
 

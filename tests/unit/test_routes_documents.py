@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from omnivore.api.routes.documents import get_document, list_documents, retry_document, upload_document
+from omnivore.api.routes.documents import (
+    get_document,
+    get_document_entities,
+    list_documents,
+    retry_document,
+    upload_document,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -675,3 +681,87 @@ async def test_cpu_file_not_checked_against_gpu_queue():
         resp = await upload_document(request=req, file=upload, db=db)
 
     assert resp.status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: get_document — summary + routing_decision fields
+# ---------------------------------------------------------------------------
+
+async def test_get_document_includes_summary_field():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.doc_metadata = {"summary": {"title": "Test", "abstract": "A doc.", "key_points": [], "topics": []}}
+    doc.routing_decision = {"policy": "default", "sink_counts": {"vector": 3}}
+    db = _make_db(get_return=doc)
+
+    resp = await get_document(document_id=doc_id, db=db)
+
+    assert resp.success is True
+    assert resp.data["summary"]["title"] == "Test"
+    assert resp.data["routing_decision"]["policy"] == "default"
+
+
+async def test_get_document_summary_none_when_absent():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.doc_metadata = {}
+    doc.routing_decision = None
+    db = _make_db(get_return=doc)
+
+    resp = await get_document(document_id=doc_id, db=db)
+
+    assert resp.data["summary"] is None
+    assert resp.data["routing_decision"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: get_document_entities endpoint
+# ---------------------------------------------------------------------------
+
+def _make_entity(label: str, value: str, normalized: str, confidence: float = 1.0) -> MagicMock:
+    e = MagicMock()
+    e.label = label
+    e.value = value
+    e.normalized = normalized
+    e.confidence = confidence
+    return e
+
+
+async def test_get_entities_returns_list():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    entities = [
+        _make_entity("ORG", "Apple Inc", "apple inc"),
+        _make_entity("GPE", "California", "california"),
+    ]
+    db = _make_db(get_return=doc, scalars_return=entities)
+
+    resp = await get_document_entities(document_id=doc_id, db=db)
+
+    assert resp.success is True
+    assert len(resp.data) == 2
+    assert resp.meta["count"] == 2
+    assert resp.data[0]["label"] == "ORG"
+    assert resp.data[0]["value"] == "Apple Inc"
+
+
+async def test_get_entities_returns_404_for_missing_document():
+    doc_id = uuid.uuid4()
+    db = _make_db(get_return=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_document_entities(document_id=doc_id, db=db)
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_get_entities_returns_empty_list_when_no_entities():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    db = _make_db(get_return=doc, scalars_return=[])
+
+    resp = await get_document_entities(document_id=doc_id, db=db)
+
+    assert resp.success is True
+    assert resp.data == []
+    assert resp.meta["count"] == 0

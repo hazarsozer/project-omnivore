@@ -72,10 +72,12 @@ async def run_harness(config: HarnessConfig) -> list[EvalResult]:
             continue
 
         accuracy = run_output.get("structural_accuracy", 0.0)
+        faithfulness = run_output.get("chunk_faithfulness")
         status = "PASS" if accuracy == 1.0 else f"FAIL({accuracy:.0%})"
+        faith_str = f"  faith={faithfulness:.0%}" if faithfulness is not None else ""
         print(f"     {status}  handler={run_output.get('handler_used')}  "
               f"chunks={run_output.get('chunk_count')}  "
-              f"frags={run_output.get('fragment_count')}")
+              f"frags={run_output.get('fragment_count')}{faith_str}")
 
         result = EvalResult(
             fixture_id=fixture_id,
@@ -88,10 +90,10 @@ async def run_harness(config: HarnessConfig) -> list[EvalResult]:
                 "chunk_count": run_output.get("chunk_count"),
                 "table_count": run_output.get("table_count"),
                 "handler_matched": run_output.get("handler_matched"),
-                "extraction_accuracy": None,   # Phase 3
-                "chunk_faithfulness": None,    # Phase 3
-                "retrieval_recall_at_10": None,  # Phase 3
-                "ndcg_at_10": None,            # Phase 3
+                "extraction_accuracy": None,           # Phase 4
+                "chunk_faithfulness": faithfulness,    # Phase 3 — substring-based
+                "retrieval_recall_at_10": None,        # Phase 4
+                "ndcg_at_10": None,                    # Phase 4
             },
             errors=run_output.get("warnings", []),
         )

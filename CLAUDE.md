@@ -112,11 +112,20 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
 - ~~Image OCR multilingual support~~ — Done (Phase 2c). Per-request `ocr_languages` override via `ctx.config`, EasyOCR allowlist, LRU-bounded reader cache.
 - **Phase 2 closed (2026-05-09).** All six P0–P3 follow-up items shipped + Opus audit closure (H-P1b retry outbox, M-P0/M-P1b/M-P2a hardening). 225 tests passing. See [`docs/phase2c-audit.md`](docs/phase2c-audit.md). Key integration-test learnings (apply to all future tests against the running app): `ASGITransport` does NOT fire the ASGI lifespan, so manually set `app.state.arq_pool` and call `registry.discover()`; cleanup must create a fresh `create_async_engine()` to avoid "Future attached to a different loop" from cross-`asyncio.run()` connection reuse.
 
-- **Deferred to Phase 3 (LOW severity, theoretical):**
+- **Deferred from Phase 2 to Phase 3 (LOW severity, theoretical):**
   - **L-1**: Retry endpoint `retry_payload.get("task")` will raise `AttributeError` → 500 if `doc.error.retry_payload` is somehow stored as a non-dict. `_fail_document` always writes a dict, so this is theoretical, but adding `if not isinstance(retry_payload, dict)` would harden it.
   - **L-2**: `tests/integration/test_e2e_pipeline.py::test_worker_queue_name_matches_api_pool_default` uses the literal `"arq:queue"` instead of `arq.connections.ArqRedis.default_queue_name`. If arq ever changes its default in a future version, the test would silently pass while a new wiring bug emerges. (Mitigated: `test_job_lands_in_arq_queue` does the empirical round-trip.)
-- LLM summarization, NER, sentiment — Phase 3
-- Routing policy engine (jsonlogic) — Phase 3
+- **Phase 3 — enrichment pipeline shipped 2026-05-10, audit OPEN.** Language detection (lingua), NER (spaCy `en_core_web_sm`), LLM summarization scaffold (Claude Haiku, no-op without `ANTHROPIC_API_KEY`), routing policy engine (declarative rules, pure-function evaluator). 53 new unit tests, 278 total passing. Opus audit (`docs/phase3-audit.md`) returned **PASS WITH BLOCKING FIXES** — 3 HIGH issues must close before Phase 3 ships:
+  - **H-1**: `summarizer.py:76` accesses `message.content[0].text` without filtering for `TextBlock` — crashes silently if extended thinking ever enables on Haiku.
+  - **H-2**: spaCy + lingua not warmed in `on_startup` — first job after worker restart blocks the event loop ~1.5s. Mirror the `_get_model()` pattern from `embeddings.py`.
+  - **H-3**: `tests/integration/test_e2e_pipeline.py` has zero assertions for Phase 3 enrichment — the wire-up could silently regress and the green test suite would not flag it.
+  - **L-3**: RAGChecker / ARES eval harness integration was part of Phase 3 scope per architecture §10 and was skipped. Required to fully close Phase 3.
+- **Deferred from Phase 3 to Phase 4 (architectural debt, documented):**
+  - **M-1 (Routing enforcement)**: `evaluate_policy()` is computed but writes go to all sinks. The engine ships as informational/observability in v1; per-fragment write gating (e.g., dropping `confidence_lt: 0.6` transcripts) requires Phase 4 work.
+  - **M-2 (Tenant policy fetch)**: `_compute_routing_decision` always uses `DEFAULT_POLICY`. `tenants.config["routing_policy"]` is never read. Implement alongside multi-tenant auth (Phase 4).
+  - **M-3 (Matched rule ID audit)**: architecture §2.4 says "Each fragment carries the matched rule id in its audit row" — `evaluate_policy` returns sinks but not the matched rule. Add when routing enforcement lands.
+  - **M-4 (Per-doc language detect)**: lingua runs N times for N chunks today. Most docs are monolingual — sample-and-propagate would be cheaper. Performance only.
+  - **M-5 (Anthropic client caching)**: client instantiated per `summarize_document` call — cache module-level keyed on api_key when LLM enrichment goes high-volume.
 - Multi-tenant auth (JWT, API keys, RLS) — Phase 4
 - Docling PDF pilot — gated behind a feature flag, never the default
 - ColPali / visual retrieval — deferred (trigger: recall@10 gap > 15 %)
@@ -186,7 +195,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 3 — enrichment, ready to start)
+## Phase roadmap (current: Phase 4 — multi-tenant auth)
 
 | Phase | What | Status |
 |---|---|---|
@@ -196,7 +205,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 2b — Heavy formats | Audio (faster-whisper), video (ffmpeg), image OCR (EasyOCR), GPU worker queue, embedding bakeoff | **Done** — 176 unit tests, 6 E2E. Bakeoff: BGE-M3 +18.7% recall@1 vs BGE-base. Audit closed 2026-05-07. See [`docs/phase2b-audit.md`](docs/phase2b-audit.md). |
 | 2c — Robustness & multilingual | `IngestContext.stream_blob()`, multilingual OCR (per-request lang override + LRU-bounded reader cache + allowlist), expanded eval corpus (53 chunks / 39 queries), backpressure (HTTP 429), idempotency guard, DLQ retry payload, queue-name alignment fix | **Done** — 164 unit tests, 6 E2E. Bakeoff verdict: bge-base ≈ bge-m3 (not significant, t=0.514). Pre-existing CPU queue-name mismatch fixed. Audit closed 2026-05-08. |
 | 2c — Final closure | All six P0–P3 follow-ups: E2E pipeline test (P0), `stream_blob()` integration test (P1), `POST /v1/documents/{id}/retry` (P1), GPU queue backpressure (P2), atomic claim in `_run_ingest` for stronger idempotency (P2), bakeoff fixture cleanup — md-003 WAL + txt-001 multi-chunk (P3). Opus audit found H-P1b (retry endpoint orphaned docs on Redis failure); fixed with transactional outbox. Three M-level hardening fixes: queue-name regression guard, retry task allowlist, `GPU_QUEUE_NAME` constant centralized. | **Done** — 225 unit + integration tests passing, ruff clean, eval harness 8/9 (txt-002 67% pre-existing). Phase 2 fully closed 2026-05-09. |
-| 3 — Enrichment | LLM summary, NER, routing policy | — |
+| 3 — Enrichment | Language detection (lingua), NER (spaCy `en_core_web_sm`), LLM summarization scaffold (Claude Haiku, gated on `ANTHROPIC_API_KEY`), routing policy engine (declarative rules), `chunk_faithfulness` metric in eval harness, API: `summary` + `routing_decision` on doc, `GET /v1/documents/{id}/entities` | **Done — 2026-05-10.** 283 tests passing, ruff clean, eval 8/9. Audit closed by Opus 4.7. See [`docs/phase3-audit.md`](docs/phase3-audit.md). 5 MEDIUM items deferred to Phase 4 (routing enforcement, tenant policy fetch, matched-rule audit, per-doc lang detect, Anthropic client caching). |
 | 4 — Multi-tenant | API keys, JWT, rate limiting, RLS | — |
 | 5 — Observability | OTel, Prometheus, Grafana, Loki | — |
 | 6 — Hardening | Chaos tests, DB partitioning, cost dashboards | Ongoing |

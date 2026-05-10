@@ -28,13 +28,14 @@ import pytest
 from arq import create_pool
 from arq.connections import RedisSettings
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from omnivore.api.main import app
 from omnivore.config import get_settings
 from omnivore.constants import DEFAULT_TENANT_ID
 from omnivore.db.models import Chunk as ChunkRow
-from omnivore.db.models import Document
+from omnivore.db.models import Document, Entity
+from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.embeddings import EMBEDDING_DIM
 from omnivore.pipeline.registry import registry
 from omnivore.worker.tasks import ingest_dispatch
@@ -134,6 +135,27 @@ def pipeline_results():
                         config_snapshot={},
                     )
                 results["ingest_result"] = ingest_result
+
+                # Step 3b — Phase 3 enrichment assertions (DB queries) ----------
+                doc_uuid = uuid.UUID(doc_id)
+                async with AsyncSessionLocal() as db:
+                    chunks_q = (
+                        await db.scalars(
+                            select(ChunkRow).where(ChunkRow.document_id == doc_uuid)
+                        )
+                    ).all()
+                    results["chunk_languages"] = [c.language for c in chunks_q]
+
+                    entities_q = (
+                        await db.scalars(
+                            select(Entity).where(Entity.document_id == doc_uuid)
+                        )
+                    ).all()
+                    results["entity_count"] = len(entities_q)
+                    results["entity_labels"] = [e.label for e in entities_q]
+
+                    doc_row = await db.get(Document, doc_uuid)
+                    results["routing_decision"] = doc_row.routing_decision if doc_row else None
 
                 # Step 4 — GET document status ------------------------------------
                 status_resp = await client.get(f"/v1/documents/{doc_id}")
@@ -252,3 +274,28 @@ class TestE2EPipeline:
             assert "content" in row
             assert "score" in row
             assert row["score"] > 0
+
+    # Phase 3 enrichment assertions ----------------------------------------
+
+    def test_chunks_have_language_detected(self, pipeline_results):
+        """Language detection must run for all chunks — English fixture → 'en'."""
+        languages = pipeline_results.get("chunk_languages", [])
+        assert len(languages) >= 1, "No chunks found — check ingest_dispatch ran"
+        assert all(
+            lang == "en" for lang in languages
+        ), f"Expected all chunks to have language='en', got {languages}"
+
+    def test_ner_produced_entities(self, pipeline_results):
+        """spaCy NER must extract at least one entity from the English test fixture."""
+        count = pipeline_results.get("entity_count", -1)
+        assert count >= 1, (
+            f"NER produced {count} entities — expected ≥1 from the English test document. "
+            f"Labels found: {pipeline_results.get('entity_labels', [])}"
+        )
+
+    def test_routing_decision_populated(self, pipeline_results):
+        """routing_decision must be persisted and have a non-empty sink_counts."""
+        rd = pipeline_results.get("routing_decision")
+        assert rd is not None, "routing_decision was not written to the Document row"
+        assert rd.get("sink_counts"), f"routing_decision.sink_counts is empty: {rd}"
+        assert rd.get("policy") == "default", f"Unexpected policy value: {rd.get('policy')}"

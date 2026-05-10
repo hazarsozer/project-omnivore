@@ -10,11 +10,15 @@ from omnivore.config import get_settings
 from omnivore.constants import GPU_QUEUE_NAME
 from omnivore.db.models import Chunk as ChunkRow
 from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox
+from omnivore.db.models import Entity as EntityRow
 from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.chunker import chunk_result
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.embeddings import EMBEDDING_MODEL, embed_chunks
+from omnivore.pipeline.enrichers import detect_language, extract_entities, summarize_document
+from omnivore.pipeline.models import Chunk
 from omnivore.pipeline.registry import registry
+from omnivore.pipeline.routing import evaluate_policy
 from omnivore.worker.context import ArqWorkflowContext
 
 logger = structlog.get_logger(__name__)
@@ -181,6 +185,11 @@ async def _run_ingest(
 
         chunks = chunk_result(result, t_id)
 
+        # Language detection — fills chunk.language before the first DB write so it's persisted.
+        for chunk in chunks:
+            if chunk.language is None:
+                chunk.language = detect_language(chunk.content)
+
         # Persist chunks without embeddings first — embedding failure won't lose chunks
         chunk_rows: list[ChunkRow] = []
         for chunk in chunks:
@@ -217,9 +226,37 @@ async def _run_ingest(
             for i, row in enumerate(table.rows):
                 db.add(ExtractedRow(table_id=et.id, ordinal=i, data=row))
 
+        # NER — extract entities and persist; failures are non-fatal
+        try:
+            entities = extract_entities(chunks)
+            for ent in entities:
+                db.add(EntityRow(
+                    document_id=doc_id,
+                    tenant_id=t_id,
+                    label=ent.label,
+                    value=ent.value,
+                    normalized=ent.normalized,
+                    confidence=ent.confidence,
+                    chunk_id=None,
+                ))
+        except Exception:
+            logger.warning("ner.failed", document_id=document_id, exc_info=True)
+
+        # LLM summarization — non-fatal, skipped when ANTHROPIC_API_KEY is absent
+        api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
+        summary = await summarize_document(chunks, api_key=api_key, filename=doc.filename)
+
+        # Routing policy — aggregate per-chunk sink decisions onto the document
+        routing_decision = _compute_routing_decision(chunks, doc.doc_metadata)
+
         doc.status = "indexed"
         doc.indexed_at = datetime.now(UTC)
-        doc.doc_metadata = {**doc.doc_metadata, **result.metadata}
+        doc.doc_metadata = {
+            **doc.doc_metadata,
+            **result.metadata,
+            **({"summary": summary.to_dict()} if summary else {}),
+        }
+        doc.routing_decision = routing_decision
         await db.commit()
 
         # Embed and back-fill — recoverable failure: chunks are already indexed via BM25
@@ -286,12 +323,26 @@ async def on_startup(ctx: dict) -> None:
     get_settings()  # warm the lru_cache singleton
     registry.discover()
     from omnivore.pipeline.embeddings import _get_model
-    _get_model()  # download ~440 MB BGE-base at boot, not on the first job
+    from omnivore.pipeline.enrichers.language import _detector, detect_language
+    from omnivore.pipeline.enrichers.ner import _nlp
+    _get_model()        # ~440 MB BGE-base
+    _nlp()              # ~12 MB spaCy en_core_web_sm (~1.1s)
+    _detector()         # build lingua detector
+    detect_language("warmup text for lingua n-gram loading " * 4)  # force n-gram load
     logger.info("worker.startup", handlers=len(registry.all_handlers()))
 
 
 async def on_shutdown(ctx: dict) -> None:
     logger.info("worker.shutdown")
+
+
+def _compute_routing_decision(chunks: list[Chunk], doc_meta: dict) -> dict:
+    """Aggregate per-chunk routing decisions into a document-level summary."""
+    sink_counts: dict[str, int] = {}
+    for chunk in chunks:
+        for sink in evaluate_policy(chunk.kind, chunk.confidence, doc_meta):
+            sink_counts[sink] = sink_counts.get(sink, 0) + 1
+    return {"policy": "default", "sink_counts": sink_counts}
 
 
 async def _fail_document(db, doc: Document, reason: str, job_kwargs: dict | None = None) -> None:

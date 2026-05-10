@@ -27,22 +27,47 @@ class MetricsEvaluator(Protocol):
     ) -> float | None: ...
 
 
+def compute_chunk_faithfulness(chunks: list, queries: list[dict]) -> float | None:
+    """Substring-based faithfulness metric (offline, no retrieval needed).
+
+    For each query with relevant_content_substrings, check whether at least one
+    substring appears (case-insensitive) in any chunk's content. Returns the
+    fraction of queries satisfied, or None if no queries have substrings defined.
+    """
+    scored_queries = [q for q in queries if q.get("relevant_content_substrings")]
+    if not scored_queries:
+        return None
+
+    all_content_lower = " ".join(
+        getattr(c, "content", c.get("content", "") if isinstance(c, dict) else "")
+        for c in chunks
+    ).lower()
+
+    hits = 0
+    for q in scored_queries:
+        substrings = q["relevant_content_substrings"]
+        if any(s.lower() in all_content_lower for s in substrings):
+            hits += 1
+
+    return round(hits / len(scored_queries), 4)
+
+
 class StubMetricsEvaluator:
     async def extraction_accuracy(self, result: dict, expected: dict) -> float | None:
-        return None  # Phase 3
+        return None
 
     async def chunk_faithfulness(self, chunks: list[dict], source_content: str) -> float | None:
-        return None  # Phase 3
+        return None
 
     async def retrieval_recall_at_k(
         self, query_results: list[dict], relevant_ids: set[str], k: int
     ) -> float | None:
-        return None  # Phase 3
+        return None
 
     async def ndcg_at_k(
         self, query_results: list[dict], relevance_scores: dict[str, int], k: int
     ) -> float | None:
-        return None  # Phase 3
+        return None
 
 
 class LiveMetricsEvaluator:

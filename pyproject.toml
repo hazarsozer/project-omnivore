@@ -33,6 +33,9 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "easyocr>=1.7.2",
     "einops>=0.8.2",
+    "anthropic>=0.100.0",
+    "spacy>=3.8.14",
+    "lingua-language-detector>=2.2.0",
 ]
 
 [project.entry-points."omnivore.handlers"]
