@@ -7,8 +7,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from omnivore.api.routes import documents, handlers_route, health, search
+from omnivore.api.routes import admin, auth_route, documents, handlers_route, health, search, tenant
 from omnivore.api.schemas import APIResponse, ErrorDetail
+from omnivore.auth.errors import AuthError
 from omnivore.config import get_settings
 from omnivore.logging_config import configure_logging
 from omnivore.pipeline.registry import registry
@@ -47,6 +48,9 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/v1")
+app.include_router(auth_route.router, prefix="/v1")
+app.include_router(admin.router, prefix="/v1")
+app.include_router(tenant.router, prefix="/v1")
 app.include_router(documents.router, prefix="/v1")
 app.include_router(search.router, prefix="/v1")
 app.include_router(handlers_route.router, prefix="/v1")
@@ -55,6 +59,17 @@ app.include_router(handlers_route.router, prefix="/v1")
 @app.get("/", include_in_schema=False)
 async def root() -> RedirectResponse:
     return RedirectResponse(url="/v1/health", status_code=307)
+
+
+@app.exception_handler(AuthError)
+async def auth_exception_handler(request: Request, exc: AuthError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.http_status,
+        content=APIResponse(
+            success=False,
+            error=ErrorDetail(code=exc.code, message=exc.message),
+        ).model_dump(),
+    )
 
 
 @app.exception_handler(Exception)

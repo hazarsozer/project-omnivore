@@ -33,8 +33,8 @@ def evaluate_policy(
     confidence: float | None,
     doc_meta: dict[str, Any],
     policy: dict[str, Any] | None = None,
-) -> frozenset[str]:
-    """Return the set of sinks for a chunk given the active policy.
+) -> tuple[frozenset[str], str | None]:
+    """Return (sinks, matched_rule_id) for a chunk given the active policy.
 
     Args:
         chunk_kind: e.g. "text", "table_row", "transcript"
@@ -43,7 +43,7 @@ def evaluate_policy(
         policy: routing policy dict; falls back to DEFAULT_POLICY if None
 
     Returns:
-        frozenset of sink names, e.g. frozenset({"vector"})
+        (frozenset of sink names, rule id that matched or None for default_sinks)
     """
     resolved = policy if policy is not None else DEFAULT_POLICY
     rules = resolved.get("rules", [])
@@ -51,9 +51,10 @@ def evaluate_policy(
 
     for rule in rules:
         if _matches(rule.get("match", {}), chunk_kind, confidence, doc_meta):
-            return frozenset(rule.get("sinks", []))
+            rule_id: str | None = rule.get("id")
+            return frozenset(rule.get("sinks", [])), rule_id
 
-    return frozenset(default_sinks)
+    return frozenset(default_sinks), None
 
 
 def validate_policy(policy: dict[str, Any]) -> list[str]:

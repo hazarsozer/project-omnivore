@@ -28,8 +28,33 @@ class Tenant(Base):  # noqa: F401  (imported by E2E test)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default="now()")
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default="now()")
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        Index("idx_api_keys_prefix", "prefix", postgresql_where="revoked_at IS NULL"),
+        Index("idx_api_keys_tenant", "tenant_id", postgresql_where="revoked_at IS NULL"),
+        {"schema": "core"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("core.tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prefix: Mapped[str] = mapped_column(Text, nullable=False)
+    key_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default="now()")
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
 
 
 class Document(Base):
@@ -90,6 +115,8 @@ class Chunk(Base):
     embedding_model: Mapped[str | None] = mapped_column(Text)
     language: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
+    sinks: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default="ARRAY['relational','vector']")
+    matched_rule_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default="now()")
 
 
@@ -141,6 +168,7 @@ class ExtractedRow(Base):
     )
     ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
     data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("core.tenants.id"), nullable=False)
 
 
 class Job(Base):

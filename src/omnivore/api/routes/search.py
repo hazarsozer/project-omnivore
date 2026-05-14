@@ -3,16 +3,17 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from omnivore.api.schemas import APIResponse
-from omnivore.constants import DEFAULT_TENANT_ID
-from omnivore.db.session import AsyncSessionLocal
+from omnivore.auth.context import AuthContext
+from omnivore.auth.dependencies import require_scope
+from omnivore.db.session import tenant_session
 from omnivore.pipeline.embeddings import QUERY_PREFIX, embed_texts
 
 logger = structlog.get_logger(__name__)
@@ -36,15 +37,19 @@ class SearchResult(BaseModel):
 
 
 @router.post("")
-async def search(request: Request, body: SearchRequest) -> APIResponse[list[SearchResult]]:
-    tenant_id = DEFAULT_TENANT_ID
+async def search(
+    request: Request,
+    body: SearchRequest,
+    auth: Annotated[AuthContext, Depends(require_scope("search:read"))],
+) -> APIResponse[list[SearchResult]]:
+    tenant_id = auth.tenant_id
 
     query_vector: list[float] | None = None
     if body.mode in ("hybrid", "vector"):
         redis = getattr(request.app.state, "arq_pool", None)
         query_vector = (await embed_texts([body.query], redis, query_prefix=QUERY_PREFIX))[0]
 
-    async with AsyncSessionLocal() as db:
+    async with tenant_session(tenant_id) as db:
         if body.mode == "bm25":
             rows = await _bm25_search(db, body.query, tenant_id, body.top_k)
         elif body.mode == "vector":

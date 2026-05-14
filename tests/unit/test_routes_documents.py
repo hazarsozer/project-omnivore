@@ -16,6 +16,34 @@ from omnivore.api.routes.documents import (
     retry_document,
     upload_document,
 )
+from omnivore.auth.context import AuthContext
+
+_TEST_TENANT_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_ALL_SCOPES = frozenset([
+    "documents:read", "documents:write",
+    "chunks:read", "entities:read",
+    "search:read", "handlers:read", "tenant:manage",
+])
+
+
+def _make_auth() -> AuthContext:
+    return AuthContext(
+        tenant_id=_TEST_TENANT_ID,
+        principal_id="test-key-id",
+        principal_type="api_key",
+        scopes=_ALL_SCOPES,
+        raw_token_hash="",
+    )
+
+
+def _rl_allowed():
+    """Return a mock RateLimitResult that allows the request."""
+    rl = MagicMock()
+    rl.allowed = True
+    rl.remaining = 90.0
+    rl.capacity = 100
+    rl.reset_after_seconds = 0
+    return rl
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -84,6 +112,7 @@ def _mock_settings() -> MagicMock:
     s.MINIO_SECRET_KEY = MagicMock()
     s.MINIO_SECRET_KEY.get_secret_value.return_value = "minioadmin"
     s.MINIO_BUCKET = "omnivore"
+    s.RL_UPLOAD_COST = 10
     return s
 
 
@@ -110,7 +139,7 @@ async def test_get_document_found():
     doc = _make_doc(doc_id)
     db = _make_db(get_return=doc)
 
-    resp = await get_document(document_id=doc_id, db=db)
+    resp = await get_document(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.success is True
     assert resp.data["document_id"] == str(doc_id)
@@ -124,7 +153,7 @@ async def test_get_document_includes_indexed_at():
     doc = _make_doc(doc_id)
     db = _make_db(get_return=doc)
 
-    resp = await get_document(document_id=doc_id, db=db)
+    resp = await get_document(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.data["indexed_at"] is not None
 
@@ -133,7 +162,7 @@ async def test_get_document_not_found_raises_404():
     db = _make_db(get_return=None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_document(document_id=uuid.uuid4(), db=db)
+        await get_document(document_id=uuid.uuid4(), db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 404
 
@@ -146,7 +175,7 @@ async def test_list_documents_returns_all():
     docs = [_make_doc() for _ in range(3)]
     db = _make_db(scalars_return=docs)
 
-    resp = await list_documents(db=db, status=None, limit=50, cursor=None)
+    resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor=None)
 
     assert resp.success is True
     assert len(resp.data) == 3
@@ -156,7 +185,7 @@ async def test_list_documents_returns_all():
 async def test_list_documents_empty():
     db = _make_db(scalars_return=[])
 
-    resp = await list_documents(db=db, status=None, limit=50, cursor=None)
+    resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor=None)
 
     assert resp.success is True
     assert resp.data == []
@@ -168,7 +197,7 @@ async def test_list_documents_response_shape():
     doc = _make_doc(doc_id)
     db = _make_db(scalars_return=[doc])
 
-    resp = await list_documents(db=db, status=None, limit=50, cursor=None)
+    resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor=None)
 
     item = resp.data[0]
     assert item["document_id"] == str(doc_id)
@@ -189,11 +218,12 @@ async def test_upload_document_dedup_returns_existing():
     upload = _make_upload_mock(b"duplicate content")
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session"),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     import json
     body = json.loads(resp.body)
@@ -209,11 +239,12 @@ async def test_upload_document_dedup_does_not_call_s3():
     upload = _make_upload_mock(b"dup")
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session") as mock_session_cls,
     ):
-        await upload_document(request=_make_request(), file=upload, db=db)
+        await upload_document(request=_make_request(), file=upload, db=db, auth=_make_auth())
 
     # Session was never instantiated (short-circuit before S3)
     mock_session_cls.assert_not_called()
@@ -231,11 +262,12 @@ async def test_upload_document_new_returns_queued():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     import json
     body = json.loads(resp.body)
@@ -254,11 +286,12 @@ async def test_upload_document_new_enqueues_arq_job():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        await upload_document(request=req, file=upload, db=db)
+        await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     arq_pool.enqueue_job.assert_awaited_once()
     call_kwargs = arq_pool.enqueue_job.call_args
@@ -273,11 +306,12 @@ async def test_upload_document_no_arq_pool_still_queued():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     import json
     body = json.loads(resp.body)
@@ -291,11 +325,12 @@ async def test_upload_document_uploads_to_s3():
     mock_session, mock_s3 = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        await upload_document(request=req, file=upload, db=db)
+        await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     mock_s3.upload_fileobj.assert_awaited_once()
     call_args = mock_s3.upload_fileobj.call_args
@@ -310,12 +345,13 @@ async def test_upload_document_413_on_oversized_file():
     upload = _make_upload_mock(b"0123456789")  # 10 bytes > 5
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=settings),
         patch("omnivore.api.routes.documents.aioboto3.Session"),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await upload_document(request=_make_request(), file=upload, db=db)
+            await upload_document(request=_make_request(), file=upload, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 413
 
@@ -339,11 +375,12 @@ async def test_upload_document_ensure_bucket_creates_if_missing():
     mock_session.client = MagicMock(return_value=s3_cm)
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        await upload_document(request=req, file=upload, db=db)
+        await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     s3.create_bucket.assert_awaited_once_with(Bucket="omnivore")
 
@@ -352,7 +389,7 @@ async def test_list_documents_with_status_filter():
     docs = [_make_doc()]
     db = _make_db(scalars_return=docs)
 
-    resp = await list_documents(db=db, status="indexed", limit=50, cursor=None)
+    resp = await list_documents(db=db, auth=_make_auth(), status="indexed", limit=50, cursor=None)
 
     assert resp.success is True
     assert len(resp.data) == 1
@@ -363,7 +400,7 @@ async def test_list_documents_invalid_status_ignored():
     docs = [_make_doc()]
     db = _make_db(scalars_return=docs)
 
-    resp = await list_documents(db=db, status="bogus_status", limit=50, cursor=None)
+    resp = await list_documents(db=db, auth=_make_auth(), status="bogus_status", limit=50, cursor=None)
 
     assert resp.success is True
 
@@ -372,7 +409,7 @@ async def test_list_documents_with_cursor():
     docs = [_make_doc()]
     db = _make_db(scalars_return=docs)
 
-    resp = await list_documents(db=db, status=None, limit=50, cursor="2026-01-01T00:00:00+00:00")
+    resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor="2026-01-01T00:00:00+00:00")
 
     assert resp.success is True
 
@@ -393,11 +430,12 @@ async def test_upload_document_arq_enqueue_failure_does_not_raise():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     import json
     body = json.loads(resp.body)
@@ -421,13 +459,14 @@ async def test_upload_returns_429_when_queue_full():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
         from fastapi import HTTPException
         try:
-            await upload_document(request=req, file=upload, db=db)
+            await upload_document(request=req, file=upload, db=db, auth=_make_auth())
             assert False, "Expected HTTPException 429"
         except HTTPException as exc:
             assert exc.status_code == 429
@@ -462,7 +501,7 @@ async def test_retry_document_returns_202_queued():
     req = _make_request(arq_pool=AsyncMock())
 
     import json
-    resp = await retry_document(document_id=doc_id, request=req, db=db)
+    resp = await retry_document(document_id=doc_id, request=req, db=db, auth=_make_auth())
     body = json.loads(resp.body)
 
     assert resp.status_code == 202
@@ -477,7 +516,7 @@ async def test_retry_document_resets_status_to_queued():
     db = _make_db(get_return=doc)
     req = _make_request(arq_pool=AsyncMock())
 
-    await retry_document(document_id=doc.id, request=req, db=db)
+    await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert doc.status == "queued"
     assert doc.error is None
@@ -490,7 +529,7 @@ async def test_retry_document_enqueues_job():
     db = _make_db(get_return=doc)
     req = _make_request(arq_pool=arq_pool)
 
-    await retry_document(document_id=doc.id, request=req, db=db)
+    await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     arq_pool.enqueue_job.assert_awaited_once()
     call_args = arq_pool.enqueue_job.call_args
@@ -502,7 +541,7 @@ async def test_retry_document_404_when_not_found():
     req = _make_request()
 
     with pytest.raises(HTTPException) as exc_info:
-        await retry_document(document_id=uuid.uuid4(), request=req, db=db)
+        await retry_document(document_id=uuid.uuid4(), request=req, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 404
 
@@ -513,7 +552,7 @@ async def test_retry_document_409_when_not_failed():
     req = _make_request()
 
     with pytest.raises(HTTPException) as exc_info:
-        await retry_document(document_id=doc.id, request=req, db=db)
+        await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 409
     assert "indexed" in exc_info.value.detail
@@ -525,7 +564,7 @@ async def test_retry_document_404_when_no_retry_payload():
     req = _make_request()
 
     with pytest.raises(HTTPException) as exc_info:
-        await retry_document(document_id=doc.id, request=req, db=db)
+        await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 404
 
@@ -536,7 +575,7 @@ async def test_retry_document_no_arq_pool_still_queues_in_db():
     db = _make_db(get_return=doc)
     req = _make_request(arq_pool=None)
 
-    resp = await retry_document(document_id=doc.id, request=req, db=db)
+    resp = await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert resp.status_code == 202
     assert doc.status == "queued"
@@ -548,7 +587,7 @@ async def test_retry_document_writes_outbox_row():
     db = _make_db(get_return=doc)
     req = _make_request(arq_pool=AsyncMock())
 
-    await retry_document(document_id=doc.id, request=req, db=db)
+    await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     # db.add() must be called at least once (for the Outbox row)
     db.add.assert_called()
@@ -563,7 +602,7 @@ async def test_retry_document_arq_enqueue_failure_outbox_provides_safety_net():
     db = _make_db(get_return=doc)
     req = _make_request(arq_pool=arq_pool)
 
-    resp = await retry_document(document_id=doc.id, request=req, db=db)
+    resp = await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert resp.status_code == 202
     assert doc.status == "queued"
@@ -579,7 +618,7 @@ async def test_retry_document_422_on_malformed_payload():
     req = _make_request()
 
     with pytest.raises(HTTPException) as exc_info:
-        await retry_document(document_id=doc.id, request=req, db=db)
+        await retry_document(document_id=doc.id, request=req, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 422
     db.commit.assert_not_called()  # DB must not be touched before validation
@@ -594,11 +633,12 @@ async def test_upload_proceeds_when_queue_below_limit():
     mock_session, _ = _mock_s3_session()
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     assert resp.status_code == 202
 
@@ -630,13 +670,14 @@ async def test_upload_returns_429_when_gpu_queue_full():
     gpu_handler.cost_class = "gpu"
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="audio/mpeg"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
         patch("omnivore.api.routes.documents.registry.resolve", return_value=gpu_handler),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await upload_document(request=req, file=upload, db=db)
+            await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 429
 
@@ -652,12 +693,13 @@ async def test_upload_proceeds_when_gpu_queue_below_limit():
     gpu_handler.cost_class = "gpu"
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="audio/mpeg"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
         patch("omnivore.api.routes.documents.registry.resolve", return_value=gpu_handler),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     assert resp.status_code == 202
 
@@ -673,12 +715,13 @@ async def test_cpu_file_not_checked_against_gpu_queue():
     cpu_handler.cost_class = "cpu"
 
     with (
+        patch("omnivore.api.routes.documents.check_rate_limit", AsyncMock(return_value=_rl_allowed())),
         patch("omnivore.api.routes.documents.magic.from_buffer", return_value="text/plain"),
         patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
         patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
         patch("omnivore.api.routes.documents.registry.resolve", return_value=cpu_handler),
     ):
-        resp = await upload_document(request=req, file=upload, db=db)
+        resp = await upload_document(request=req, file=upload, db=db, auth=_make_auth())
 
     assert resp.status_code == 202
 
@@ -694,7 +737,7 @@ async def test_get_document_includes_summary_field():
     doc.routing_decision = {"policy": "default", "sink_counts": {"vector": 3}}
     db = _make_db(get_return=doc)
 
-    resp = await get_document(document_id=doc_id, db=db)
+    resp = await get_document(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.success is True
     assert resp.data["summary"]["title"] == "Test"
@@ -708,7 +751,7 @@ async def test_get_document_summary_none_when_absent():
     doc.routing_decision = None
     db = _make_db(get_return=doc)
 
-    resp = await get_document(document_id=doc_id, db=db)
+    resp = await get_document(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.data["summary"] is None
     assert resp.data["routing_decision"] is None
@@ -736,7 +779,7 @@ async def test_get_entities_returns_list():
     ]
     db = _make_db(get_return=doc, scalars_return=entities)
 
-    resp = await get_document_entities(document_id=doc_id, db=db)
+    resp = await get_document_entities(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.success is True
     assert len(resp.data) == 2
@@ -750,7 +793,7 @@ async def test_get_entities_returns_404_for_missing_document():
     db = _make_db(get_return=None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_document_entities(document_id=doc_id, db=db)
+        await get_document_entities(document_id=doc_id, db=db, auth=_make_auth())
 
     assert exc_info.value.status_code == 404
 
@@ -760,7 +803,7 @@ async def test_get_entities_returns_empty_list_when_no_entities():
     doc = _make_doc(doc_id)
     db = _make_db(get_return=doc, scalars_return=[])
 
-    resp = await get_document_entities(document_id=doc_id, db=db)
+    resp = await get_document_entities(document_id=doc_id, db=db, auth=_make_auth())
 
     assert resp.success is True
     assert resp.data == []

@@ -20,6 +20,20 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY: SecretStr | None = None
 
+    # Phase 4 — Auth
+    # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0
+    JWT_PRIVATE_KEY_PEM: SecretStr = SecretStr("")
+    JWT_PUBLIC_KEY_PEM: str = ""
+    JWT_ALGORITHM: str = "RS256"
+    JWT_ACCESS_TOKEN_EXPIRE_SECONDS: int = 3600  # 1 hour
+    ADMIN_BOOTSTRAP_TOKEN: SecretStr = SecretStr("change-me-admin-token")
+
+    # Phase 4 — Rate limiting (token bucket, per-tenant defaults)
+    RL_CAPACITY: int = 100          # max burst tokens
+    RL_REFILL_RATE: float = 10.0    # tokens per second
+    RL_UPLOAD_COST: int = 10        # tokens consumed per upload
+    RL_DEFAULT_COST: int = 1        # tokens consumed per other request
+
     LOG_LEVEL: str = "INFO"
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_SIZE_BYTES: int = 2_147_483_648

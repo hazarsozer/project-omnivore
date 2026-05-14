@@ -26,6 +26,9 @@ def _make_doc(doc_id: uuid.UUID) -> MagicMock:
     doc.handler_version = None
     doc.doc_metadata = {}
     doc.error = None
+    # Must be a dict so that (tenant.config or {}).get("routing_policy") returns None
+    # when tasks.py calls db.get(Tenant, t_id) and gets this mock back.
+    doc.config = {}
     return doc
 
 
@@ -122,7 +125,7 @@ async def test_ingest_dispatch_success_status_indexed():
     chunks = _one_chunk(doc_id, _TENANT_ID)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
@@ -150,7 +153,7 @@ async def test_ingest_dispatch_commits_at_least_twice():
     chunks = _one_chunk(doc_id, _TENANT_ID)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
@@ -175,7 +178,7 @@ async def test_ingest_dispatch_adds_chunk_rows():
     chunks = _one_chunk(doc_id, _TENANT_ID)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
@@ -203,7 +206,7 @@ async def test_ingest_dispatch_doc_not_found():
 
     # Handler must resolve so the request reaches _run_ingest where the DB check lives.
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
     ):
         out = await ingest_dispatch(
@@ -229,7 +232,7 @@ async def test_ingest_dispatch_no_handler():
     session_local, db = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=None),
     ):
         out = await ingest_dispatch(
@@ -266,7 +269,7 @@ async def test_ingest_dispatch_handler_extract_fails():
             raise ValueError("parse error")
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=BrokenHandler),
     ):
         out = await ingest_dispatch(
@@ -295,7 +298,7 @@ async def test_ingest_dispatch_embed_fails_status_still_indexed():
     chunks = _one_chunk(doc_id, _TENANT_ID)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(side_effect=RuntimeError("GPU OOM"))),
@@ -341,7 +344,7 @@ async def test_ingest_dispatch_persists_extracted_tables():
     )
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=_one_chunk(doc_id, _TENANT_ID)),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
@@ -373,7 +376,7 @@ async def test_ingest_dispatch_routes_gpu_handler_to_gpu_queue():
     arq_ctx = _arq_ctx()
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)),
     ):
         out = await ingest_dispatch(
@@ -403,7 +406,7 @@ async def test_ingest_dispatch_cpu_handler_not_routed_to_gpu():
     arq_ctx = _arq_ctx()
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=[]),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=[])),
@@ -433,7 +436,7 @@ async def test_gpu_ingest_dispatch_success():
     chunks = _one_chunk(doc_id, _TENANT_ID)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(result)),
         patch("omnivore.worker.tasks.chunk_result", return_value=chunks),
         patch("omnivore.worker.tasks.embed_chunks", AsyncMock(return_value=_FAKE_VEC)),
@@ -457,7 +460,7 @@ async def test_gpu_ingest_dispatch_no_handler_returns_error():
     session_local, _ = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=None),
     ):
         out = await gpu_ingest_dispatch(
@@ -491,7 +494,7 @@ async def test_outbox_relay_empty_queue():
 
     redis = AsyncMock()
 
-    with patch("omnivore.worker.tasks.AsyncSessionLocal", session_local):
+    with patch("omnivore.worker.tasks.admin_session", session_local):
         result = await outbox_relay({"redis": redis})
 
     assert result == {"published": 0}
@@ -527,7 +530,7 @@ async def test_outbox_relay_publishes_unpublished_rows():
     redis = AsyncMock()
     redis.enqueue_job = AsyncMock()
 
-    with patch("omnivore.worker.tasks.AsyncSessionLocal", session_local):
+    with patch("omnivore.worker.tasks.admin_session", session_local):
         result = await outbox_relay({"redis": redis})
 
     assert result == {"published": 2}
@@ -571,7 +574,7 @@ async def test_outbox_relay_handles_enqueue_failure_gracefully():
     redis = AsyncMock()
     redis.enqueue_job = enqueue_side_effect
 
-    with patch("omnivore.worker.tasks.AsyncSessionLocal", session_local):
+    with patch("omnivore.worker.tasks.admin_session", session_local):
         result = await outbox_relay({"redis": redis})
 
     # Only the first row succeeds; second fails gracefully
@@ -590,7 +593,7 @@ async def test_ingest_dispatch_already_indexed_returns_early():
     session_local, db = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -616,7 +619,7 @@ async def test_ingest_dispatch_already_failed_returns_early():
     session_local, _ = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -640,7 +643,7 @@ async def test_ingest_dispatch_extracting_returns_early():
     session_local, db = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -665,7 +668,7 @@ async def test_ingest_dispatch_enriching_returns_early():
     session_local, db = _make_session_ctx(doc)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -690,7 +693,7 @@ async def test_ingest_dispatch_claim_lost_returns_already_claimed():
     session_local, db = _make_session_ctx(doc, claim_succeeds=False)
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_fake_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -716,7 +719,7 @@ async def test_ingest_dispatch_gpu_routing_skipped_if_already_routing():
     arq_ctx = _arq_ctx()
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_make_gpu_handler(_empty_result(doc_id))),
     ):
         out = await ingest_dispatch(
@@ -754,7 +757,7 @@ async def test_ingest_dispatch_handler_extract_fails_stores_retry_payload():
             raise RuntimeError("simulated extraction failure")
 
     with (
-        patch("omnivore.worker.tasks.AsyncSessionLocal", session_local),
+        patch("omnivore.worker.tasks.tenant_session", session_local),
         patch("omnivore.worker.tasks.registry.resolve", return_value=_BrokenHandler),
     ):
         out = await ingest_dispatch(

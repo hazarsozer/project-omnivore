@@ -14,10 +14,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnivore.api.schemas import APIResponse
+from omnivore.auth.context import AuthContext
+from omnivore.auth.dependencies import get_db_for_tenant, require_scope
+from omnivore.auth.rate_limit import check_rate_limit
 from omnivore.config import get_settings
-from omnivore.constants import DEFAULT_TENANT_ID, GPU_QUEUE_NAME
+from omnivore.constants import GPU_QUEUE_NAME
 from omnivore.db.models import Document, Entity, Outbox
-from omnivore.db.session import get_db
 from omnivore.pipeline.registry import registry
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -31,10 +33,22 @@ _STREAM_CHUNK = 1 << 20  # 1 MB read chunks
 async def upload_document(
     request: Request,
     file: UploadFile,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("documents:write"))],
 ) -> JSONResponse:
     settings = get_settings()
-    tenant_id = DEFAULT_TENANT_ID  # Phase 4: real tenant from JWT
+    tenant_id = auth.tenant_id
+
+    rl = await check_rate_limit(tenant_id, cost=settings.RL_UPLOAD_COST)
+    if not rl.allowed:
+        return JSONResponse(
+            status_code=429,
+            headers=_rl_headers(rl),
+            content=APIResponse(
+                success=False,
+                error={"code": "RATE_LIMITED", "message": f"Rate limit exceeded. Retry in {rl.reset_after_seconds}s."},
+            ).model_dump(),
+        )
 
     # Stream file in chunks: compute sha256 incrementally, sniff MIME from first 2 KB
     hasher = hashlib.sha256()
@@ -62,6 +76,7 @@ async def upload_document(
     if existing:
         return JSONResponse(
             status_code=202,
+            headers=_rl_headers(rl),
             content=APIResponse(
                 success=True,
                 data={
@@ -72,8 +87,7 @@ async def upload_document(
             ).model_dump(),
         )
 
-    # Backpressure: reject new uploads when either the CPU or GPU queue is over its limit.
-    # CPU queue name comes from the pool itself so it stays in sync with the worker.
+    # Backpressure: reject when CPU or GPU queue is over limit
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
         queue_depth = await pool.zcard(pool.default_queue_name)
@@ -83,7 +97,6 @@ async def upload_document(
                 detail=f"Queue full ({queue_depth} pending jobs). Retry after some jobs complete.",
             )
 
-        # GPU backpressure: only checked when the file would route to the GPU worker.
         handler_cls = registry.resolve(detected_mime)
         if handler_cls is not None and getattr(handler_cls, "cost_class", None) == "gpu":
             gpu_depth = await pool.zcard(GPU_QUEUE_NAME)
@@ -97,7 +110,6 @@ async def upload_document(
     ext = (file.filename or "").rsplit(".", 1)[-1] if "." in (file.filename or "") else "bin"
     storage_key = f"raw/{tenant_id}/{datetime.now(UTC).strftime('%Y/%m')}/{document_id}.{ext}"
 
-    # Stream from Starlette's spooled temp file directly to MinIO — no full-file buffer in memory
     await file.seek(0)
     endpoint = f"{'https' if settings.MINIO_SECURE else 'http'}://{settings.MINIO_ENDPOINT}"
     s3_session = aioboto3.Session()
@@ -116,8 +128,6 @@ async def upload_document(
             ExtraArgs={"ContentType": detected_mime},
         )
 
-    # Transactional outbox: Document + Outbox row committed atomically.
-    # If enqueue fails after commit, the relay job drains unpublished outbox rows.
     job_kwargs = {
         "document_id": str(document_id),
         "mime": detected_mime,
@@ -145,7 +155,6 @@ async def upload_document(
     await db.commit()
     await db.refresh(outbox_entry)
 
-    # Best-effort immediate enqueue; outbox relay handles failures
     if pool:
         try:
             await pool.enqueue_job("ingest_dispatch", **job_kwargs)
@@ -156,9 +165,13 @@ async def upload_document(
     else:
         logger.warning("arq_pool.not_initialized", document_id=str(document_id))
 
-    logger.info("document.queued", document_id=str(document_id), mime=detected_mime, size=total)
+    logger.info(
+        "document.queued",
+        document_id=str(document_id), mime=detected_mime, size=total, tenant_id=str(tenant_id),
+    )
     return JSONResponse(
         status_code=202,
+        headers=_rl_headers(rl),
         content=APIResponse(
             success=True,
             data={
@@ -173,10 +186,11 @@ async def upload_document(
 @router.get("/{document_id}")
 async def get_document(
     document_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("documents:read"))],
 ) -> APIResponse[dict]:
     doc = await db.get(Document, document_id)
-    if doc is None:
+    if doc is None or doc.tenant_id != auth.tenant_id:
         raise HTTPException(status_code=404, detail="Document not found")
     return APIResponse(
         success=True,
@@ -200,10 +214,11 @@ async def get_document(
 @router.get("/{document_id}/entities")
 async def get_document_entities(
     document_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("entities:read"))],
 ) -> APIResponse[list]:
     doc = await db.get(Document, document_id)
-    if doc is None:
+    if doc is None or doc.tenant_id != auth.tenant_id:
         raise HTTPException(status_code=404, detail="Document not found")
 
     rows = (
@@ -231,12 +246,13 @@ async def get_document_entities(
 
 @router.get("")
 async def list_documents(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("documents:read"))],
     status: str | None = Query(None),
     limit: int = Query(50, le=200),
     cursor: str | None = Query(None),
 ) -> APIResponse[list]:
-    tenant_id = DEFAULT_TENANT_ID
+    tenant_id = auth.tenant_id
     stmt = select(Document).where(Document.tenant_id == tenant_id).order_by(Document.created_at.desc()).limit(limit)
     if status and status in _ALLOWED_STATUSES:
         stmt = stmt.where(Document.status == status)
@@ -270,10 +286,11 @@ _ALLOWED_RETRY_TASKS = frozenset({"ingest_dispatch", "gpu_ingest_dispatch"})
 async def retry_document(
     document_id: uuid.UUID,
     request: Request,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("documents:write"))],
 ) -> JSONResponse:
     doc = await db.get(Document, document_id)
-    if doc is None:
+    if doc is None or doc.tenant_id != auth.tenant_id:
         raise HTTPException(status_code=404, detail="Document not found")
 
     if doc.status != "failed":
@@ -289,7 +306,6 @@ async def retry_document(
             detail="No retry payload available — document failed before a job was enqueued",
         )
 
-    # Validate payload structure before touching the DB.
     task_name = retry_payload.get("task")
     task_kwargs = retry_payload.get("kwargs")
     if task_name not in _ALLOWED_RETRY_TASKS or not isinstance(task_kwargs, dict):
@@ -298,8 +314,6 @@ async def retry_document(
             detail=f"Malformed retry_payload: task must be one of {sorted(_ALLOWED_RETRY_TASKS)}",
         )
 
-    # Reset status and write an Outbox row atomically so the outbox_relay cron
-    # can re-enqueue on transient Redis failures — same safety net as the upload path.
     doc.status = "queued"
     doc.error = None
     outbox_entry = Outbox(
@@ -334,6 +348,17 @@ async def retry_document(
             },
         ).model_dump(),
     )
+
+
+def _rl_headers(rl) -> dict[str, str]:
+    import time
+    reset_at = int(time.time()) + rl.reset_after_seconds
+    return {
+        "X-RateLimit-Limit": str(rl.capacity),
+        "X-RateLimit-Remaining": str(int(rl.remaining)),
+        "X-RateLimit-Reset": str(reset_at),
+        **({"Retry-After": str(rl.reset_after_seconds)} if not rl.allowed else {}),
+    }
 
 
 async def _ensure_bucket(s3, bucket: str) -> None:

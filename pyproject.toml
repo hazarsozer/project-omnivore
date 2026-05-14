@@ -36,6 +36,8 @@ dependencies = [
     "anthropic>=0.100.0",
     "spacy>=3.8.14",
     "lingua-language-detector>=2.2.0",
+    "argon2-cffi>=25.1.0",
+    "pyjwt[crypto]>=2.12.1",
 ]
 
 [project.entry-points."omnivore.handlers"]

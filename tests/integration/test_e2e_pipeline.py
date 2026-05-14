@@ -31,10 +31,11 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 
 from omnivore.api.main import app
+from omnivore.auth.api_key import generate_api_key, hash_key
 from omnivore.config import get_settings
 from omnivore.constants import DEFAULT_TENANT_ID
+from omnivore.db.models import ApiKey, Document, Entity
 from omnivore.db.models import Chunk as ChunkRow
-from omnivore.db.models import Document, Entity
 from omnivore.db.session import AsyncSessionLocal
 from omnivore.pipeline.embeddings import EMBEDDING_DIM
 from omnivore.pipeline.registry import registry
@@ -98,6 +99,31 @@ def pipeline_results():
         pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
         app.state.arq_pool = pool
 
+        # Dispose the module-level engine to clear any stale connections from prior
+        # asyncio.run() calls (e.g., auth provisioning fixture).  Recreating on demand
+        # ensures all connections are bound to this event loop.
+        from omnivore.db.session import engine as _db_engine
+        await _db_engine.dispose()
+
+        # Create an API key for the default tenant so authenticated routes work.
+        # Use a fresh engine to avoid "Future attached to a different loop" from pooled
+        # connections created in a previous asyncio.run() (e.g., auth provisioning fixture).
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        _key_engine = create_async_engine(settings.DATABASE_URL)
+        _KeySession = async_sessionmaker(_key_engine, expire_on_commit=False)
+        raw_key, prefix = generate_api_key()
+        async with _KeySession() as db:
+            db.add(ApiKey(
+                tenant_id=DEFAULT_TENANT_ID,
+                name="e2e-test",
+                prefix=prefix,
+                key_hash=hash_key(raw_key),
+                scopes=["documents:read", "documents:write", "search:read", "handlers:read"],
+            ))
+            await db.commit()
+        await _key_engine.dispose()
+        _auth_headers = {"X-API-Key": raw_key}
+
         try:
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -106,6 +132,7 @@ def pipeline_results():
                 resp = await client.post(
                     "/v1/documents",
                     files={"file": ("e2e_pipeline.txt", io.BytesIO(sample), "text/plain")},
+                    headers=_auth_headers,
                 )
                 results["upload_status_code"] = resp.status_code
                 results["upload_body"] = resp.json()
@@ -158,7 +185,7 @@ def pipeline_results():
                     results["routing_decision"] = doc_row.routing_decision if doc_row else None
 
                 # Step 4 — GET document status ------------------------------------
-                status_resp = await client.get(f"/v1/documents/{doc_id}")
+                status_resp = await client.get(f"/v1/documents/{doc_id}", headers=_auth_headers)
                 results["status_code"] = status_resp.status_code
                 results["doc_data"] = status_resp.json().get("data", {})
 
@@ -170,6 +197,7 @@ def pipeline_results():
                         "mode": "bm25",
                         "top_k": 10,
                     },
+                    headers=_auth_headers,
                 )
                 results["search_status_code"] = search_resp.status_code
                 results["search_results"] = search_resp.json().get("data", [])
