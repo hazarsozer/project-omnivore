@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import uuid
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -23,6 +25,8 @@ from omnivore.config import get_settings
 from omnivore.db.models import ApiKey, Document, Tenant
 from omnivore.pipeline.registry import registry
 
+_TEST_ADMIN_TOKEN = "test-admin-bootstrap-for-integration-only"
+
 # ---------------------------------------------------------------------------
 # Module-scoped fixture — all async I/O in ONE asyncio.run()
 # ---------------------------------------------------------------------------
@@ -32,7 +36,7 @@ def auth_results():
     """Run all auth scenario checks in a single event loop; return result dict."""
     results: dict = {}
 
-    async def _run():
+    async def _run():  # noqa: PLR0912
         settings = get_settings()
         registry.discover()
         app.state.arq_pool = None
@@ -144,9 +148,29 @@ def auth_results():
             r = await c.post("/v1/admin/tenants", json={"slug": "fail", "display_name": "Fail"})
             results["admin_notoken_status"] = r.status_code
 
+            # 11. Admin create-tenant happy path — verifies C-1 fix (admin_session commits)
+            slug = f"admin-positive-{uuid.uuid4().hex[:8]}"
+            r = await c.post(
+                "/v1/admin/tenants",
+                json={"slug": slug, "display_name": "Admin Positive Test"},
+                headers={"x-admin-token": get_settings().ADMIN_BOOTSTRAP_TOKEN.get_secret_value()},
+            )
+            results["admin_positive_status"] = r.status_code
+            results["admin_positive_data"] = r.json().get("data", {})
+
+            new_key = results["admin_positive_data"].get("api_key")
+            if new_key:
+                r2 = await c.get("/v1/documents", headers={"X-API-Key": new_key})
+                results["admin_created_key_status"] = r2.status_code
+            else:
+                results["admin_created_key_status"] = None
+
         await engine.dispose()
 
-    asyncio.run(_run())
+    with patch.dict(os.environ, {"ADMIN_BOOTSTRAP_TOKEN": _TEST_ADMIN_TOKEN}):
+        get_settings.cache_clear()
+        asyncio.run(_run())
+    get_settings.cache_clear()
     return results
 
 
@@ -196,3 +220,24 @@ def test_handlers_with_valid_key(auth_results):
 
 def test_admin_create_tenant_requires_token(auth_results):
     assert auth_results["admin_notoken_status"] == 401
+
+
+@pytest.mark.integration
+def test_admin_create_tenant_positive_path(auth_results):
+    """C-1 regression guard: admin provisioning must persist to DB and return a usable key."""
+    assert auth_results["admin_positive_status"] == 201, (
+        f"Admin create-tenant failed: {auth_results.get('admin_positive_data')}"
+    )
+    data = auth_results["admin_positive_data"]
+    assert "tenant_id" in data
+    assert "api_key" in data
+
+
+@pytest.mark.integration
+def test_admin_created_api_key_works(auth_results):
+    """Key returned by admin provisioning must authenticate subsequent requests."""
+    status = auth_results.get("admin_created_key_status")
+    assert status == 200, (
+        f"API key from admin provisioning returned {status} — "
+        "tenant or key rows were not committed (C-1 bug regressed)"
+    )

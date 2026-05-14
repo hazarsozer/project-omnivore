@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnivore.api.schemas import APIResponse
 from omnivore.auth.context import AuthContext
-from omnivore.auth.dependencies import get_db_for_tenant, require_scope
+from omnivore.auth.dependencies import get_db_for_tenant, rate_limited, require_scope
 from omnivore.auth.rate_limit import check_rate_limit
 from omnivore.config import get_settings
 from omnivore.constants import GPU_QUEUE_NAME
@@ -188,6 +188,7 @@ async def get_document(
     document_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("documents:read"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     doc = await db.get(Document, document_id)
     if doc is None or doc.tenant_id != auth.tenant_id:
@@ -216,6 +217,7 @@ async def get_document_entities(
     document_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("entities:read"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[list]:
     doc = await db.get(Document, document_id)
     if doc is None or doc.tenant_id != auth.tenant_id:
@@ -248,6 +250,7 @@ async def get_document_entities(
 async def list_documents(
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("documents:read"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
     status: str | None = Query(None),
     limit: int = Query(50, le=200),
     cursor: str | None = Query(None),
@@ -288,6 +291,7 @@ async def retry_document(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("documents:write"))],
+    _rl: Annotated[None, Depends(rate_limited(10))] = None,
 ) -> JSONResponse:
     doc = await db.get(Document, document_id)
     if doc is None or doc.tenant_id != auth.tenant_id:

@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from omnivore.api.schemas import APIResponse
 from omnivore.auth.context import AuthContext
-from omnivore.auth.dependencies import require_scope
+from omnivore.auth.dependencies import rate_limited, require_scope
 from omnivore.db.session import tenant_session
 from omnivore.pipeline.embeddings import QUERY_PREFIX, embed_texts
 
@@ -41,6 +41,7 @@ async def search(
     request: Request,
     body: SearchRequest,
     auth: Annotated[AuthContext, Depends(require_scope("search:read"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[list[SearchResult]]:
     tenant_id = auth.tenant_id
 

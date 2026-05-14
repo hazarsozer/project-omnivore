@@ -6,12 +6,13 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import select
 
 from omnivore.api.schemas import APIResponse
 from omnivore.auth.admin_token import verify_admin_token
 from omnivore.auth.api_key import generate_api_key, hash_key
+from omnivore.auth.cache import invalidate_tenant_auth
 from omnivore.db.models import ApiKey, Tenant
 from omnivore.db.session import admin_session
 
@@ -42,12 +43,27 @@ class CreateKeyRequest(BaseModel):
     test: bool = False
 
 
+class UpdateTenantRequest(BaseModel):
+    display_name: str | None = None
+    status: str | None = None
+    config: dict | None = None
+
+    @model_validator(mode="after")
+    def _validate_routing_policy(self) -> UpdateTenantRequest:
+        if self.config and "routing_policy" in self.config:
+            from omnivore.pipeline.routing import validate_policy
+            errors = validate_policy(self.config["routing_policy"])
+            if errors:
+                raise ValueError(f"Invalid routing_policy: {errors}")
+        return self
+
+
 @router.post("/tenants", status_code=201)
 async def create_tenant(
     body: CreateTenantRequest,
     _: Annotated[None, Depends(_require_admin)],
 ) -> APIResponse[dict]:
-    raw_key, prefix = generate_api_key(test=body.test if hasattr(body, "test") else False)
+    raw_key, prefix = generate_api_key()
 
     async with admin_session() as db:
         existing = await db.scalar(select(Tenant).where(Tenant.slug == body.slug))
@@ -61,7 +77,7 @@ async def create_tenant(
             status="active",
         )
         db.add(tenant)
-        await db.flush()  # get tenant.id before committing
+        await db.flush()
 
         api_key = ApiKey(
             tenant_id=tenant.id,
@@ -83,7 +99,7 @@ async def create_tenant(
             "tenant_id": str(tenant_id),
             "slug": body.slug,
             "display_name": body.display_name,
-            "api_key": raw_key,           # shown ONCE, never persisted as plaintext
+            "api_key": raw_key,
             "api_key_id": str(key_id),
             "api_key_prefix": prefix,
         },
@@ -116,21 +132,25 @@ async def list_tenants(
 @router.patch("/tenants/{tenant_id}")
 async def update_tenant(
     tenant_id: uuid.UUID,
-    body: dict,
+    body: UpdateTenantRequest,
     _: Annotated[None, Depends(_require_admin)],
 ) -> APIResponse[dict]:
     async with admin_session() as db:
         tenant = await db.get(Tenant, tenant_id)
         if not tenant:
             raise HTTPException(status_code=404, detail="Tenant not found")
-        for field in ("display_name", "status", "config"):
-            if field in body:
-                setattr(tenant, field, body[field])
-        await db.flush()
-        return APIResponse(
-            success=True,
-            data={"tenant_id": str(tenant.id), "slug": tenant.slug, "status": tenant.status},
-        )
+        if body.display_name is not None:
+            tenant.display_name = body.display_name
+        if body.status is not None:
+            tenant.status = body.status
+        if body.config is not None:
+            tenant.config = {**(tenant.config or {}), **body.config}
+
+    await invalidate_tenant_auth(tenant_id)
+    return APIResponse(
+        success=True,
+        data={"tenant_id": str(tenant.id), "slug": tenant.slug, "status": tenant.status},
+    )
 
 
 @router.post("/tenants/{tenant_id}/api-keys", status_code=201)
@@ -170,11 +190,15 @@ async def revoke_api_key(
     _: Annotated[None, Depends(_require_admin)],
 ) -> APIResponse[dict]:
     from datetime import UTC, datetime
+    tenant_id: uuid.UUID | None = None
     async with admin_session() as db:
         key = await db.get(ApiKey, key_id)
         if not key:
             raise HTTPException(status_code=404, detail="API key not found")
+        tenant_id = key.tenant_id
         key.revoked_at = datetime.now(UTC)
-        await db.flush()
+
+    if tenant_id:
+        await invalidate_tenant_auth(tenant_id)
     logger.info("api_key.revoked", key_id=str(key_id))
     return APIResponse(success=True, data={"key_id": str(key_id), "revoked": True})

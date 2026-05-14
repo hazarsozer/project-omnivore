@@ -22,10 +22,8 @@ def _mock_settings(capacity=100, rate=10.0, upload_cost=10, default_cost=1):
 def _make_redis_client(script_result):
     """Return a mock redis client whose Lua script returns script_result."""
     script_mock = AsyncMock(return_value=script_result)
-    r = AsyncMock()
+    r = MagicMock()
     r.register_script = MagicMock(return_value=script_mock)
-    r.__aenter__ = AsyncMock(return_value=r)
-    r.__aexit__ = AsyncMock(return_value=False)
     return r, script_mock
 
 
@@ -50,7 +48,7 @@ class TestCheckRateLimit:
         r, _ = _make_redis_client([1, 9000, 100])  # [allowed, remaining*100, capacity]
         with (
             patch("omnivore.auth.rate_limit.get_settings", return_value=_mock_settings()),
-            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=r),
+            patch("omnivore.auth.rate_limit._redis_client", r),
         ):
             result = await check_rate_limit(_TENANT)
         assert result.allowed is True
@@ -60,7 +58,7 @@ class TestCheckRateLimit:
         r, _ = _make_redis_client([0, 0, 100])
         with (
             patch("omnivore.auth.rate_limit.get_settings", return_value=_mock_settings()),
-            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=r),
+            patch("omnivore.auth.rate_limit._redis_client", r),
         ):
             result = await check_rate_limit(_TENANT)
         assert result.allowed is False
@@ -70,7 +68,7 @@ class TestCheckRateLimit:
         r, _ = _make_redis_client([1, 9000, 100])
         with (
             patch("omnivore.auth.rate_limit.get_settings", return_value=_mock_settings()),
-            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=r),
+            patch("omnivore.auth.rate_limit._redis_client", r),
         ):
             result = await check_rate_limit(_TENANT, cost=5)
         assert result.allowed is True
@@ -79,7 +77,7 @@ class TestCheckRateLimit:
         r, _ = _make_redis_client([1, 20000, 200])
         with (
             patch("omnivore.auth.rate_limit.get_settings", return_value=_mock_settings()),
-            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=r),
+            patch("omnivore.auth.rate_limit._redis_client", r),
         ):
             result = await check_rate_limit(_TENANT, capacity=200)
         assert result.capacity == 200

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnivore.api.schemas import APIResponse
 from omnivore.auth.api_key import generate_api_key, hash_key
 from omnivore.auth.context import AuthContext
-from omnivore.auth.dependencies import get_db_for_tenant, require_scope
+from omnivore.auth.dependencies import get_db_for_tenant, rate_limited, require_scope
 from omnivore.db.models import ApiKey, Tenant
 from omnivore.db.session import admin_session
 from omnivore.pipeline.routing import validate_policy
@@ -25,6 +25,7 @@ logger = structlog.get_logger(__name__)
 async def get_tenant_info(
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     tenant = await db.get(Tenant, auth.tenant_id)
     if not tenant:
@@ -45,6 +46,7 @@ async def get_tenant_info(
 async def get_tenant_config(
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     tenant = await db.get(Tenant, auth.tenant_id)
     if not tenant:
@@ -57,6 +59,7 @@ async def update_tenant_config(
     body: dict,
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     # Validate routing_policy before persisting
     if "routing_policy" in body:
@@ -81,6 +84,7 @@ async def update_tenant_config(
 async def list_own_keys(
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[list]:
     rows = (
         await db.scalars(
@@ -110,6 +114,7 @@ async def list_own_keys(
 async def create_own_key(
     body: dict,
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     name = body.get("name", "key")
     scopes = body.get("scopes", list(auth.scopes))
@@ -140,11 +145,15 @@ async def revoke_own_key(
     key_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
     from datetime import UTC, datetime
+
+    from omnivore.auth.cache import invalidate_tenant_auth
     key = await db.get(ApiKey, key_id)
     if not key or key.tenant_id != auth.tenant_id:
         raise HTTPException(status_code=404, detail="API key not found")
     key.revoked_at = datetime.now(UTC)
     await db.commit()
+    await invalidate_tenant_auth(auth.tenant_id)
     return APIResponse(success=True, data={"key_id": str(key_id), "revoked": True})

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+import redis.asyncio as aioredis
 import structlog
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -7,6 +8,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
+import omnivore.auth.cache as _auth_cache
+import omnivore.auth.rate_limit as _auth_rl
 from omnivore.api.routes import admin, auth_route, documents, handlers_route, health, search, tenant
 from omnivore.api.schemas import APIResponse, ErrorDetail
 from omnivore.auth.errors import AuthError
@@ -25,10 +28,16 @@ async def lifespan(app: FastAPI):
     registry.discover()
     logger.info("startup", environment=settings.ENVIRONMENT, handlers=len(registry.all_handlers()))
 
+    # Shared Redis connection pool for auth cache and rate limiter (avoids per-request churn).
+    _auth_redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    _auth_cache._redis_client = _auth_redis
+    _auth_rl._redis_client = _auth_redis
+
     app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
 
     yield
 
+    await _auth_redis.aclose()
     await app.state.arq_pool.close()
     logger.info("shutdown")
 

@@ -7,6 +7,17 @@ import redis.asyncio as aioredis
 
 from omnivore.config import get_settings
 
+# Singleton — set by api/main.py lifespan and worker on_startup.
+# Falls back to a fresh connection when None (e.g. in unit tests).
+_redis_client: aioredis.Redis | None = None
+
+
+def _get_redis() -> aioredis.Redis:
+    if _redis_client is not None:
+        return _redis_client
+    return aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
+
+
 # Lua script: atomic token-bucket refill + consume.
 # Returns [allowed(0|1), remaining_tokens_float*100, capacity].
 _LUA_SCRIPT = """
@@ -43,7 +54,6 @@ class RateLimitResult:
         self.allowed = allowed
         self.remaining = remaining
         self.capacity = capacity
-        # Seconds until <cost> tokens are available again
         self.reset_after_seconds = int((cost - remaining) / refill_rate) + 1 if not allowed else 0
 
 
@@ -62,9 +72,9 @@ async def check_rate_limit(
     bucket_key = f"rl:tenant:{tenant_id}"
     now_ms = int(time.time() * 1000)
 
-    async with aioredis.from_url(settings.REDIS_URL, decode_responses=True) as r:
-        script = r.register_script(_LUA_SCRIPT)
-        result = await script(keys=[bucket_key], args=[_capacity, _rate, _cost, now_ms])
+    r = _get_redis()
+    script = r.register_script(_LUA_SCRIPT)
+    result = await script(keys=[bucket_key], args=[_capacity, _rate, _cost, now_ms])
 
     allowed = bool(result[0])
     remaining = result[1] / 100.0

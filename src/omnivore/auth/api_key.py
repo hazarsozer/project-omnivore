@@ -4,7 +4,7 @@ import hashlib
 import secrets
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import VerificationError, VerifyMismatchError  # noqa: F401
 
 _ph = PasswordHasher(memory_cost=65536, time_cost=2, parallelism=1)
 
@@ -32,7 +32,7 @@ def hash_key(raw_key: str) -> str:
 def verify_key(stored_hash: str, raw_key: str) -> bool:
     try:
         return _ph.verify(stored_hash, raw_key)
-    except VerifyMismatchError:
+    except VerificationError:
         return False
 
 

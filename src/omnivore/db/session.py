@@ -50,10 +50,14 @@ async def tenant_session(tenant_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
 
 @asynccontextmanager
 async def admin_session() -> AsyncIterator[AsyncSession]:
-    """Open a session that bypasses RLS — for seeding, admin ops, outbox relay."""
+    """Open a session that bypasses RLS — commits on clean exit, rolls back on exception."""
     async with AsyncSessionLocal() as session:
         try:
             await session.execute(text("SET app.bypass_rls = 'on'"))
             yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
         finally:
             await session.close()

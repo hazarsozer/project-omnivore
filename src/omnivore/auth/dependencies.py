@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Annotated
 
 import structlog
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,15 +49,38 @@ def require_scope(scope: str):
 async def get_db_for_tenant(
     auth: Annotated[AuthContext, Depends(require_auth)],
 ) -> AsyncGenerator[AsyncSession, None]:
-    # Plain session — route handlers enforce isolation via explicit tenant_id checks.
-    # RLS (SET LOCAL app.current_tenant_id) would work here for non-superuser DB roles,
-    # but SET LOCAL is transaction-scoped and conflicts with multi-commit route handlers.
-    # The explicit ownership checks (doc.tenant_id != auth.tenant_id) are the primary guard.
+    # UUID is always hex+dashes — safe to embed in SQL without parameters.
     async with AsyncSessionLocal() as session:
         try:
+            await session.execute(text(f"SET app.current_tenant_id = '{auth.tenant_id}'"))
             yield session
         finally:
+            try:
+                await session.execute(text("RESET app.current_tenant_id"))
+            except Exception:
+                pass
             await session.close()
+
+
+def rate_limited(cost: int = 1):
+    """Dependency that enforces the token-bucket rate limit for the authenticated tenant."""
+    async def _dep(
+        auth: Annotated[AuthContext, Depends(require_auth)],
+        response: Response,
+    ) -> None:
+        from omnivore.auth.rate_limit import check_rate_limit
+        rl = await check_rate_limit(auth.tenant_id, cost=cost)
+        reset_at = int(time.time()) + rl.reset_after_seconds
+        response.headers["X-RateLimit-Limit"] = str(rl.capacity)
+        response.headers["X-RateLimit-Remaining"] = str(int(rl.remaining))
+        response.headers["X-RateLimit-Reset"] = str(reset_at)
+        if not rl.allowed:
+            response.headers["Retry-After"] = str(rl.reset_after_seconds)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Retry in {rl.reset_after_seconds}s.",
+            )
+    return _dep
 
 
 # --- internal helpers ---
@@ -90,7 +114,7 @@ async def _resolve_api_key(raw_key: str) -> AuthContext:
         raise InvalidCredentialsError()
     if matched.expires_at is not None:
         from datetime import UTC, datetime
-        if datetime.now(UTC) > matched.expires_at.replace(tzinfo=UTC):
+        if datetime.now(UTC) > matched.expires_at.astimezone(UTC):
             raise InvalidCredentialsError()
 
     # Load tenant status
@@ -109,7 +133,6 @@ async def _resolve_api_key(raw_key: str) -> AuthContext:
     }
     await set_cached_auth(ck, payload)
 
-    # Fire-and-forget last_used_at update (best effort)
     import asyncio
     asyncio.ensure_future(_update_last_used(matched.id))
 
@@ -161,7 +184,7 @@ def _cached_to_ctx(cached: dict, principal_type: str) -> AuthContext:
         principal_id=cached["principal_id"],
         principal_type=principal_type,  # type: ignore[arg-type]
         scopes=frozenset(cached["scopes"]),
-        raw_token_hash="",  # not re-stored from cache
+        raw_token_hash="",
     )
 
 
