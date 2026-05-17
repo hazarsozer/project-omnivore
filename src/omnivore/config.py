@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     MAX_QUEUE_DEPTH: int = 100     # reject new uploads (HTTP 429) when CPU queue exceeds this
     MAX_GPU_QUEUE_DEPTH: int = 20  # same guard for GPU queue (audio/video/image; max_jobs=2)
 
+    # Phase 5 — Observability
+    OTEL_ENABLED: bool = True
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
+    OTEL_SERVICE_NAME: str = "omnivore"
+    METRICS_ENABLED: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
