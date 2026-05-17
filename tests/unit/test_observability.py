@@ -39,6 +39,7 @@ def test_setup_tracing_registers_global_provider(tmp_path):
     setup_tracing(settings)
     provider = trace.get_tracer_provider()
     assert not isinstance(provider, trace.NoOpTracerProvider)
+    provider.shutdown()  # stop background exporter thread to avoid noisy retry output
 
 
 def test_setup_tracing_disabled_is_noop():

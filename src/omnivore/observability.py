@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import logging
-
 import prometheus_client
+import structlog
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-logger = logging.getLogger(__name__)
+from omnivore.config import Settings
+
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Prometheus metric objects — module-level singletons.
@@ -71,7 +72,7 @@ HTTP_DURATION = prometheus_client.Histogram(
 # ---------------------------------------------------------------------------
 
 
-def setup_tracing(settings) -> None:  # type: ignore[no-untyped-def]
+def setup_tracing(settings: Settings) -> None:
     """Configure OTel TracerProvider with OTLP/HTTP exporter.
 
     No-ops when OTEL_ENABLED=False. The OTLP exporter uses a BatchSpanProcessor
@@ -87,9 +88,9 @@ def setup_tracing(settings) -> None:  # type: ignore[no-untyped-def]
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     logger.info(
-        "OTel tracing configured endpoint=%s service=%s",
-        settings.OTEL_EXPORTER_OTLP_ENDPOINT,
-        settings.OTEL_SERVICE_NAME,
+        "observability.tracing.configured",
+        endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT,
+        service=settings.OTEL_SERVICE_NAME,
     )
 
 
