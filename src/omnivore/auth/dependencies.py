@@ -50,15 +50,13 @@ async def get_db_for_tenant(
     auth: Annotated[AuthContext, Depends(require_auth)],
 ) -> AsyncGenerator[AsyncSession, None]:
     # UUID is always hex+dashes — safe to embed in SQL without parameters.
+    from omnivore.db.session import reset_guc
     async with AsyncSessionLocal() as session:
         try:
             await session.execute(text(f"SET app.current_tenant_id = '{auth.tenant_id}'"))
             yield session
         finally:
-            try:
-                await session.execute(text("RESET app.current_tenant_id"))
-            except Exception:
-                pass
+            await reset_guc(session, "app.current_tenant_id")
             await session.close()
 
 
@@ -94,7 +92,7 @@ async def _resolve_api_key(raw_key: str) -> AuthContext:
     prefix = extract_prefix(raw_key)
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            await session.execute(text("SET app.bypass_rls = 'on'"))
+            await session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
             rows = (
                 await session.execute(
                     select(ApiKey).where(
@@ -120,7 +118,7 @@ async def _resolve_api_key(raw_key: str) -> AuthContext:
     # Load tenant status
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            await session.execute(text("SET app.bypass_rls = 'on'"))
+            await session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
             tenant = await session.get(Tenant, matched.tenant_id)
 
     if tenant is None or tenant.status != "active":
@@ -160,7 +158,7 @@ async def _resolve_jwt(token: str) -> AuthContext:
     # Verify tenant is active
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            await session.execute(text("SET app.bypass_rls = 'on'"))
+            await session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
             tenant = await session.get(Tenant, tenant_id)
 
     if tenant is None or tenant.status != "active":
@@ -195,7 +193,7 @@ async def _update_last_used(key_id: uuid.UUID) -> None:
     try:
         async with AsyncSessionLocal() as session:
             async with session.begin():
-                await session.execute(text("SET app.bypass_rls = 'on'"))
+                await session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
                 await session.execute(
                     sa_update(ApiKey)
                     .where(ApiKey.id == key_id)
