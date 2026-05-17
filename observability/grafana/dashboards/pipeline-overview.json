@@ -1,0 +1,61 @@
+{
+  "title": "Pipeline Overview",
+  "uid": "omnivore-pipeline",
+  "schemaVersion": 38,
+  "version": 1,
+  "tags": ["omnivore"],
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Document Ingest Rate (per minute)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "rate(omnivore_documents_total[5m]) * 60", "legendFormat": "{{status}}"}]
+    },
+    {
+      "id": 2,
+      "title": "Ingest Duration p95 by Handler (s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(omnivore_ingest_duration_seconds_bucket[5m]))", "legendFormat": "p95 {{handler}}"}]
+    },
+    {
+      "id": 3,
+      "title": "Queue Depth",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "omnivore_queue_depth", "legendFormat": "{{queue}}"}]
+    },
+    {
+      "id": 4,
+      "title": "Failed Documents (per minute)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "rate(omnivore_documents_total{status=\"failed\"}[5m]) * 60", "legendFormat": "failures"}]
+    },
+    {
+      "id": 5,
+      "title": "HTTP Request Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "rate(omnivore_http_requests_total[5m])", "legendFormat": "{{method}} {{route}} {{status_code}}"}]
+    },
+    {
+      "id": 6,
+      "title": "HTTP p95 Latency (s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(omnivore_http_duration_seconds_bucket[5m]))", "legendFormat": "p95 {{route}}"}]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "title": "Tenants",
+  "uid": "omnivore-tenants",
+  "schemaVersion": 38,
+  "version": 1,
+  "tags": ["omnivore"],
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "refresh": "1m",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Documents Indexed per Tenant (last 24h)",
+      "type": "bargauge",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "options": {"reduceOptions": {"calcs": ["sum"]}},
+      "targets": [{"expr": "increase(omnivore_documents_total{status=\"indexed\"}[24h])", "legendFormat": "{{tenant_id}}"}]
+    },
+    {
+      "id": 2,
+      "title": "Rate-Limit Events (429s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "rate(omnivore_http_requests_total{status_code=\"429\"}[5m])", "legendFormat": "429 rate"}]
+    },
+    {
+      "id": 3,
+      "title": "Chunks Produced per Tenant",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "omnivore-prometheus"},
+      "targets": [{"expr": "rate(omnivore_chunks_total[5m])", "legendFormat": "{{tenant_id}} {{kind}}"}]
+    }
+  ]
+}
