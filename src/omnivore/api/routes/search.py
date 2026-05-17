@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import time as _time
 import uuid
 from typing import Annotated, Any, Literal
 
@@ -14,6 +15,7 @@ from omnivore.api.schemas import APIResponse
 from omnivore.auth.context import AuthContext
 from omnivore.auth.dependencies import rate_limited, require_scope
 from omnivore.db.session import tenant_session
+from omnivore.observability import SEARCH_DURATION
 from omnivore.pipeline.embeddings import QUERY_PREFIX, embed_texts
 
 logger = structlog.get_logger(__name__)
@@ -44,6 +46,7 @@ async def search(
     _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[list[SearchResult]]:
     tenant_id = auth.tenant_id
+    _t0 = _time.perf_counter()
 
     query_vector: list[float] | None = None
     if body.mode in ("hybrid", "vector"):
@@ -58,6 +61,7 @@ async def search(
         else:
             rows = await _hybrid_search(db, body.query, query_vector, tenant_id, body.top_k)  # type: ignore[arg-type]
 
+    SEARCH_DURATION.labels(mode=body.mode).observe(_time.perf_counter() - _t0)
     results = [
         SearchResult(
             chunk_id=str(r["chunk_id"]),

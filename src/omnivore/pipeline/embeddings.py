@@ -12,6 +12,7 @@ import structlog
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
+from omnivore.observability import EMBEDDINGS_TOTAL, get_tracer
 from omnivore.pipeline.models import Chunk
 
 logger = structlog.get_logger(__name__)
@@ -101,8 +102,18 @@ async def embed_texts(texts: list[str], redis=None, query_prefix: str = "") -> l
     return results  # type: ignore[return-value]  # all slots filled above
 
 
-async def embed_chunks(chunks: list[Chunk], redis=None) -> list[list[float]]:
+async def _embed_chunks_impl(chunks: list[Chunk], redis=None) -> list[list[float]]:
     return await embed_texts([c.content for c in chunks], redis)
+
+
+async def embed_chunks(chunks: list[Chunk], redis=None) -> list[list[float]]:
+    with get_tracer().start_as_current_span(
+        "omnivore.embeddings.batch",
+        attributes={"chunk_count": len(chunks), "model": EMBEDDING_MODEL},
+    ):
+        result = await _embed_chunks_impl(chunks, redis)
+    EMBEDDINGS_TOTAL.labels(model=EMBEDDING_MODEL).inc(len(chunks))
+    return result
 
 
 def _cache_key(text: str) -> str:
