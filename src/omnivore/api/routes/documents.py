@@ -10,6 +10,7 @@ import magic
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,7 +158,13 @@ async def upload_document(
 
     if pool:
         try:
-            await pool.enqueue_job("ingest_dispatch", **job_kwargs)
+            _carrier: dict[str, str] = {}
+            TraceContextTextMapPropagator().inject(_carrier)
+            await pool.enqueue_job(
+                "ingest_dispatch",
+                **job_kwargs,
+                _otel_traceparent=_carrier.get("traceparent"),
+            )
             outbox_entry.published_at = datetime.now(UTC)
             await db.commit()
         except Exception:
@@ -332,7 +339,13 @@ async def retry_document(
     pool = getattr(request.app.state, "arq_pool", None)
     if pool:
         try:
-            await pool.enqueue_job(task_name, **task_kwargs)
+            _carrier: dict[str, str] = {}
+            TraceContextTextMapPropagator().inject(_carrier)
+            await pool.enqueue_job(
+                task_name,
+                **task_kwargs,
+                _otel_traceparent=_carrier.get("traceparent"),
+            )
             outbox_entry.published_at = datetime.now(UTC)
             await db.commit()
         except Exception:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import time as _time
 import uuid
 from datetime import UTC, datetime
 
 import structlog
+from opentelemetry import context as context_api
+from opentelemetry.trace import StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from sqlalchemy import select, update
 
 from omnivore.config import get_settings
@@ -12,6 +16,15 @@ from omnivore.db.models import Chunk as ChunkRow
 from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox, Tenant
 from omnivore.db.models import Entity as EntityRow
 from omnivore.db.session import admin_session, tenant_session
+from omnivore.observability import (
+    CHUNKS_TOTAL,
+    DOCUMENTS_TOTAL,
+    INGEST_DURATION,
+    setup_tracing,
+)
+from omnivore.observability import (
+    get_tracer as _get_tracer,
+)
 from omnivore.pipeline.chunker import chunk_result
 from omnivore.pipeline.context import BlobRef, IngestContext
 from omnivore.pipeline.embeddings import EMBEDDING_MODEL, embed_chunks
@@ -34,46 +47,64 @@ async def ingest_dispatch(
     size: int,
     tenant_id: str,
     config_snapshot: dict,
+    _otel_traceparent: str | None = None,
 ) -> dict:
-    _job_kwargs = {
-        "document_id": document_id, "mime": mime, "size": size,
-        "tenant_id": tenant_id, "config_snapshot": config_snapshot,
-    }
-    t_id = uuid.UUID(tenant_id)
-    handler_cls = registry.resolve(mime)
-    if handler_cls is None:
-        async with tenant_session(t_id) as db:
-            doc = await db.get(Document, uuid.UUID(document_id))
-            if doc:
-                await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
-        return {"status": "error", "reason": "no_handler"}
+    parent_ctx = (
+        TraceContextTextMapPropagator().extract({"traceparent": _otel_traceparent})
+        if _otel_traceparent
+        else context_api.get_current()
+    )
+    with _get_tracer().start_as_current_span(
+        "omnivore.ingest.dispatch",
+        context=parent_ctx,
+        attributes={
+            "document_id": document_id,
+            "mime_type": mime,
+            "tenant_id": tenant_id,
+        },
+    ):
+        _job_kwargs = {
+            "document_id": document_id, "mime": mime, "size": size,
+            "tenant_id": tenant_id, "config_snapshot": config_snapshot,
+        }
+        t_id = uuid.UUID(tenant_id)
+        handler_cls = registry.resolve(mime)
+        if handler_cls is None:
+            async with tenant_session(t_id) as db:
+                doc = await db.get(Document, uuid.UUID(document_id))
+                if doc:
+                    await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
+            return {"status": "error", "reason": "no_handler"}
 
-    if handler_cls.cost_class in GPU_COST_CLASSES:
-        logger.info("ingest.dispatch.routed_to_gpu", document_id=document_id, mime=mime)
-        async with tenant_session(t_id) as db:
-            doc = await db.get(Document, uuid.UUID(document_id))
-            if doc:
-                if doc.status != "queued":
-                    logger.info(
-                        "ingest.dispatch.routing_skipped",
-                        document_id=document_id,
-                        status=doc.status,
-                    )
-                    return {"status": doc.status, "document_id": document_id, "reason": "already_processed"}
-                doc.status = "routing"
-                await db.commit()
-        await ctx["redis"].enqueue_job(
-            "gpu_ingest_dispatch",
-            _queue_name=GPU_QUEUE_NAME,
-            document_id=document_id,
-            mime=mime,
-            size=size,
-            tenant_id=tenant_id,
-            config_snapshot=config_snapshot,
-        )
-        return {"status": "routed_to_gpu", "document_id": document_id}
+        if handler_cls.cost_class in GPU_COST_CLASSES:
+            logger.info("ingest.dispatch.routed_to_gpu", document_id=document_id, mime=mime)
+            async with tenant_session(t_id) as db:
+                doc = await db.get(Document, uuid.UUID(document_id))
+                if doc:
+                    if doc.status != "queued":
+                        logger.info(
+                            "ingest.dispatch.routing_skipped",
+                            document_id=document_id,
+                            status=doc.status,
+                        )
+                        return {"status": doc.status, "document_id": document_id, "reason": "already_processed"}
+                    doc.status = "routing"
+                    await db.commit()
+            _carrier: dict[str, str] = {}
+            TraceContextTextMapPropagator().inject(_carrier)
+            await ctx["redis"].enqueue_job(
+                "gpu_ingest_dispatch",
+                _queue_name=GPU_QUEUE_NAME,
+                document_id=document_id,
+                mime=mime,
+                size=size,
+                tenant_id=tenant_id,
+                config_snapshot=config_snapshot,
+                _otel_traceparent=_carrier.get("traceparent"),
+            )
+            return {"status": "routed_to_gpu", "document_id": document_id}
 
-    return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
+        return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
 
 
 async def gpu_ingest_dispatch(
@@ -84,21 +115,36 @@ async def gpu_ingest_dispatch(
     size: int,
     tenant_id: str,
     config_snapshot: dict,
+    _otel_traceparent: str | None = None,
 ) -> dict:
-    _job_kwargs = {
-        "document_id": document_id, "mime": mime, "size": size,
-        "tenant_id": tenant_id, "config_snapshot": config_snapshot,
-    }
-    t_id = uuid.UUID(tenant_id)
-    handler_cls = registry.resolve(mime)
-    if handler_cls is None:
-        async with tenant_session(t_id) as db:
-            doc = await db.get(Document, uuid.UUID(document_id))
-            if doc:
-                await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
-        return {"status": "error", "reason": "no_handler"}
+    parent_ctx = (
+        TraceContextTextMapPropagator().extract({"traceparent": _otel_traceparent})
+        if _otel_traceparent
+        else context_api.get_current()
+    )
+    with _get_tracer().start_as_current_span(
+        "omnivore.gpu_ingest.dispatch",
+        context=parent_ctx,
+        attributes={
+            "document_id": document_id,
+            "mime_type": mime,
+            "tenant_id": tenant_id,
+        },
+    ):
+        _job_kwargs = {
+            "document_id": document_id, "mime": mime, "size": size,
+            "tenant_id": tenant_id, "config_snapshot": config_snapshot,
+        }
+        t_id = uuid.UUID(tenant_id)
+        handler_cls = registry.resolve(mime)
+        if handler_cls is None:
+            async with tenant_session(t_id) as db:
+                doc = await db.get(Document, uuid.UUID(document_id))
+                if doc:
+                    await _fail_document(db, doc, f"No handler for MIME type: {mime}", _job_kwargs)
+            return {"status": "error", "reason": "no_handler"}
 
-    return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
+        return await _run_ingest(ctx, handler_cls, document_id, mime, size, tenant_id, config_snapshot)
 
 
 async def _run_ingest(
@@ -110,6 +156,7 @@ async def _run_ingest(
     tenant_id: str,
     config_snapshot: dict,
 ) -> dict:
+    _ingest_start = _time.monotonic()
     wf_ctx = ArqWorkflowContext(ctx)
     settings = get_settings()
     doc_id = uuid.UUID(document_id)
@@ -168,12 +215,24 @@ async def _run_ingest(
             return {"status": "extracting", "document_id": document_id, "reason": "already_claimed"}
         await db.commit()
 
-        try:
-            result = await handler.extract(blob, ingest_ctx)
-        except Exception as exc:
-            logger.exception("handler.extract.failed", document_id=document_id, handler=handler.name)
-            await _fail_document(db, doc, str(exc), job_kwargs)
-            return {"status": "error", "reason": str(exc)}
+        with _get_tracer().start_as_current_span(
+            "omnivore.ingest.extract",
+            attributes={"handler": handler.name, "handler_version": handler.version},
+        ) as extract_span:
+            try:
+                result = await handler.extract(blob, ingest_ctx)
+            except Exception as exc:
+                extract_span.set_status(StatusCode.ERROR, str(exc))
+                extract_span.record_exception(exc)
+                logger.exception("handler.extract.failed", document_id=document_id, handler=handler.name)
+                DOCUMENTS_TOTAL.labels(
+                    status="failed", tenant_id=str(t_id), mime_type=mime
+                ).inc()
+                INGEST_DURATION.labels(
+                    handler=handler.name, status="failed"
+                ).observe(_time.monotonic() - _ingest_start)
+                await _fail_document(db, doc, str(exc), job_kwargs)
+                return {"status": "error", "reason": str(exc)}
 
         doc.status = "enriching"
         await db.commit()
@@ -181,9 +240,10 @@ async def _run_ingest(
         chunks = chunk_result(result, t_id)
 
         # Language detection
-        for chunk in chunks:
-            if chunk.language is None:
-                chunk.language = detect_language(chunk.content)
+        with _get_tracer().start_as_current_span("omnivore.ingest.enrich.language"):
+            for chunk in chunks:
+                if chunk.language is None:
+                    chunk.language = detect_language(chunk.content)
 
         # M-1/M-3: Compute routing per chunk, store sinks and matched_rule_id
         chunk_sinks: list[frozenset[str]] = []
@@ -232,24 +292,29 @@ async def _run_ingest(
                 db.add(ExtractedRow(table_id=et.id, ordinal=i, data=row, tenant_id=t_id))
 
         # NER — non-fatal
-        try:
-            entities = extract_entities(chunks)
-            for ent in entities:
-                db.add(EntityRow(
-                    document_id=doc_id,
-                    tenant_id=t_id,
-                    label=ent.label,
-                    value=ent.value,
-                    normalized=ent.normalized,
-                    confidence=ent.confidence,
-                    chunk_id=None,
-                ))
-        except Exception:
-            logger.warning("ner.failed", document_id=document_id, exc_info=True)
+        with _get_tracer().start_as_current_span(
+            "omnivore.ingest.enrich.ner",
+            attributes={"chunk_count": len(chunks)},
+        ):
+            try:
+                entities = extract_entities(chunks)
+                for ent in entities:
+                    db.add(EntityRow(
+                        document_id=doc_id,
+                        tenant_id=t_id,
+                        label=ent.label,
+                        value=ent.value,
+                        normalized=ent.normalized,
+                        confidence=ent.confidence,
+                        chunk_id=None,
+                    ))
+            except Exception:
+                logger.warning("ner.failed", document_id=document_id, exc_info=True)
 
         # LLM summarization — non-fatal
-        api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
-        summary = await summarize_document(chunks, api_key=api_key, filename=doc.filename)
+        with _get_tracer().start_as_current_span("omnivore.ingest.enrich.summarize"):
+            api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
+            summary = await summarize_document(chunks, api_key=api_key, filename=doc.filename)
 
         # Routing summary for document-level audit
         routing_decision = _compute_routing_decision(chunks, chunk_sinks, tenant_policy)
@@ -263,6 +328,13 @@ async def _run_ingest(
         }
         doc.routing_decision = routing_decision
         await db.commit()
+
+        for chunk in chunks:
+            CHUNKS_TOTAL.labels(kind=chunk.kind, tenant_id=str(t_id)).inc()
+        DOCUMENTS_TOTAL.labels(status="indexed", tenant_id=str(t_id), mime_type=mime).inc()
+        INGEST_DURATION.labels(handler=handler.name, status="indexed").observe(
+            _time.monotonic() - _ingest_start
+        )
 
         # M-1: Only embed chunks that are routed to the vector sink
         try:
@@ -331,7 +403,8 @@ async def outbox_relay(ctx: dict) -> dict:
 
 
 async def on_startup(ctx: dict) -> None:
-    get_settings()
+    settings = get_settings()
+    setup_tracing(settings)
     registry.discover()
     from omnivore.pipeline.embeddings import _get_model
     from omnivore.pipeline.enrichers.language import _detector, detect_language
