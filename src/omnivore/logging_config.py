@@ -1,8 +1,24 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import structlog
+from opentelemetry import trace
 
 from omnivore.config import Settings
+
+
+def _otel_context_processor(
+    logger: Any, method: Any, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Structlog processor: inject trace_id + span_id from the active OTel span."""
+    span = trace.get_current_span()
+    if span.is_recording():
+        ctx = span.get_span_context()
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
 
 
 def configure_logging(settings: Settings) -> None:
@@ -12,6 +28,7 @@ def configure_logging(settings: Settings) -> None:
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        _otel_context_processor,
     ]
 
     if settings.ENVIRONMENT == "development":
