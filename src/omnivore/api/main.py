@@ -1,12 +1,20 @@
+from __future__ import annotations
+
+import asyncio
+import time
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 import structlog
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Match
 
 import omnivore.auth.cache as _auth_cache
 import omnivore.auth.rate_limit as _auth_rl
@@ -14,10 +22,54 @@ from omnivore.api.routes import admin, auth_route, documents, handlers_route, he
 from omnivore.api.schemas import APIResponse, ErrorDetail
 from omnivore.auth.errors import AuthError
 from omnivore.config import get_settings
+from omnivore.constants import GPU_QUEUE_NAME
 from omnivore.logging_config import configure_logging
+from omnivore.observability import (
+    HTTP_DURATION,
+    HTTP_REQUESTS_TOTAL,
+    QUEUE_DEPTH,
+    setup_tracing,
+)
 from omnivore.pipeline.registry import registry
 
 logger = structlog.get_logger(__name__)
+
+
+class _PrometheusMiddleware(BaseHTTPMiddleware):
+    """Record omnivore_http_requests_total and omnivore_http_duration_seconds."""
+
+    async def dispatch(self, request: Request, call_next):
+        route = _route_template(request)
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration = time.perf_counter() - start
+        status = str(response.status_code)
+        HTTP_REQUESTS_TOTAL.labels(
+            method=request.method, route=route, status_code=status
+        ).inc()
+        HTTP_DURATION.labels(method=request.method, route=route).observe(duration)
+        return response
+
+
+def _route_template(request: Request) -> str:
+    for route in request.app.routes:
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return getattr(route, "path", request.url.path)
+    return request.url.path
+
+
+async def _poll_queue_depth(arq_pool) -> None:
+    """Background task: update QUEUE_DEPTH gauge every 30 s."""
+    while True:
+        try:
+            default_depth = await arq_pool.zcard(arq_pool.default_queue_name)
+            QUEUE_DEPTH.labels(queue="default").set(default_depth)
+            gpu_depth = await arq_pool.zcard(GPU_QUEUE_NAME)
+            QUEUE_DEPTH.labels(queue="gpu").set(gpu_depth)
+        except Exception:
+            pass
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -25,18 +77,25 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings)
 
+    # Observability — set up before anything else so early logs get trace_id
+    setup_tracing(settings)
+
     registry.discover()
     logger.info("startup", environment=settings.ENVIRONMENT, handlers=len(registry.all_handlers()))
 
-    # Shared Redis connection pool for auth cache and rate limiter (avoids per-request churn).
+    # Redis singletons for auth cache + rate limiter
     _auth_redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     _auth_cache._redis_client = _auth_redis
     _auth_rl._redis_client = _auth_redis
 
     app.state.arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
 
+    # Start queue-depth poller (best-effort, ignored if Redis is unreachable)
+    poller_task = asyncio.create_task(_poll_queue_depth(app.state.arq_pool))
+
     yield
 
+    poller_task.cancel()
     await _auth_redis.aclose()
     await app.state.arq_pool.close()
     logger.info("shutdown")
@@ -55,6 +114,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(_PrometheusMiddleware)
+
+# OTel FastAPI auto-instrumentation — adds http.server spans for every request
+try:
+    FastAPIInstrumentor.instrument_app(app)
+except Exception:
+    pass
+
+# Prometheus /metrics endpoint — explicit route avoids Starlette's mount trailing-slash redirect
+@app.get("/metrics", include_in_schema=False)
+async def metrics_endpoint() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 app.include_router(health.router, prefix="/v1")
 app.include_router(auth_route.router, prefix="/v1")
