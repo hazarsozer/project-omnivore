@@ -193,7 +193,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 5 — Observability)
+## Phase roadmap (current: Phase 6 — Hardening)
 
 | Phase | What | Status |
 |---|---|---|
@@ -205,5 +205,5 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 2c — Final closure | All six P0–P3 follow-ups: E2E pipeline test (P0), `stream_blob()` integration test (P1), `POST /v1/documents/{id}/retry` (P1), GPU queue backpressure (P2), atomic claim in `_run_ingest` for stronger idempotency (P2), bakeoff fixture cleanup — md-003 WAL + txt-001 multi-chunk (P3). Opus audit found H-P1b (retry endpoint orphaned docs on Redis failure); fixed with transactional outbox. Three M-level hardening fixes: queue-name regression guard, retry task allowlist, `GPU_QUEUE_NAME` constant centralized. | **Done** — 225 unit + integration tests passing, ruff clean, eval harness 8/9 (txt-002 67% pre-existing). Phase 2 fully closed 2026-05-09. |
 | 3 — Enrichment | Language detection (lingua), NER (spaCy `en_core_web_sm`), LLM summarization scaffold (Claude Haiku, gated on `ANTHROPIC_API_KEY`), routing policy engine (declarative rules), `chunk_faithfulness` metric in eval harness, API: `summary` + `routing_decision` on doc, `GET /v1/documents/{id}/entities` | **Done — 2026-05-10.** 283 tests passing, ruff clean, eval 8/9. Audit closed by Opus 4.7. See [`docs/phase3-audit.md`](docs/phase3-audit.md). 5 MEDIUM items deferred to Phase 4 (routing enforcement, tenant policy fetch, matched-rule audit, per-doc lang detect, Anthropic client caching). |
 | 4 — Multi-tenant | API keys (Argon2id), RS256 JWT exchange, fine-grained scopes, Lua token-bucket rate limiter, FORCE ROW LEVEL SECURITY on 6 tables, admin/tenant self-service endpoints. M-1/M-2/M-3 closed (routing enforcement, tenant policy fetch, matched-rule audit). | **Done — 2026-05-14.** 329 tests passing, ruff clean. Opus audit (`docs/phase4-audit.md`) closed: C-1 (`admin_session` now commits on clean exit), C-2 (version-counter cache invalidation), H-1 (RLS GUC set/reset in `get_db_for_tenant`), H-2 (`rate_limited` dependency on all routes), H-3 (Redis singleton in lifespan), H-4 (`VerificationError` catch in `verify_key`), H-5 (`UpdateTenantRequest` Pydantic model with policy validation), M-2 (positive admin provisioning integration test). |
-| 5 — Observability | OTel, Prometheus, Grafana, Loki | — |
+| 5 — Observability | OTel traces (spans in API + worker → Tempo via OTLP), prometheus-client metrics (`/metrics` scrape → Prometheus), structlog JSON → Promtail → Loki, Grafana dashboards (Pipeline Overview / Search / Tenants) auto-provisioned. W3C traceparent propagation across API→ARQ boundary. `docker compose --profile monitoring up -d`. Tempo v3 config fix (compactor stanza removed). | **Done — 2026-05-18.** 346 tests passing, ruff clean. NEW-H-1 GUC pool-leak fix (Opus re-audit) included. |
 | 6 — Hardening | Chaos tests, DB partitioning, cost dashboards | Ongoing |
