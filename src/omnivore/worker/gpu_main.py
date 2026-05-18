@@ -3,6 +3,7 @@ from __future__ import annotations
 import arq
 import structlog
 from arq.connections import RedisSettings
+from prometheus_client import start_http_server
 
 from omnivore.config import get_settings
 from omnivore.constants import GPU_QUEUE_NAME
@@ -18,8 +19,11 @@ async def _gpu_on_startup(ctx: dict) -> None:
     settings = get_settings()
     configure_logging(settings)
     setup_tracing(settings)
-    from prometheus_client import start_http_server
-    start_http_server(port=9102)
+    try:
+        start_http_server(port=9102)
+        logger.info("gpu_worker.metrics_server.started", port=9102)
+    except OSError as exc:
+        logger.warning("gpu_worker.metrics_server.bind_failed", port=9102, error=str(exc))
     registry.discover()
     from omnivore.pipeline.enrichers.language import _detector, detect_language
     from omnivore.pipeline.enrichers.ner import _nlp

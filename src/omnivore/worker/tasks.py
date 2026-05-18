@@ -8,6 +8,7 @@ import structlog
 from opentelemetry import context as context_api
 from opentelemetry.trace import StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from prometheus_client import start_http_server
 from sqlalchemy import select, update
 
 from omnivore.config import get_settings
@@ -407,8 +408,11 @@ async def on_startup(ctx: dict) -> None:
     settings = get_settings()
     configure_logging(settings)
     setup_tracing(settings)
-    from prometheus_client import start_http_server
-    start_http_server(port=9101)
+    try:
+        start_http_server(port=9101)
+        logger.info("worker.metrics_server.started", port=9101)
+    except OSError as exc:
+        logger.warning("worker.metrics_server.bind_failed", port=9101, error=str(exc))
     registry.discover()
     from omnivore.pipeline.embeddings import _get_model
     from omnivore.pipeline.enrichers.language import _detector, detect_language
