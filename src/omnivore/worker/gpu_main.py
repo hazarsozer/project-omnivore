@@ -18,6 +18,8 @@ async def _gpu_on_startup(ctx: dict) -> None:
     settings = get_settings()
     configure_logging(settings)
     setup_tracing(settings)
+    from prometheus_client import start_http_server
+    start_http_server(port=9102)
     registry.discover()
     from omnivore.pipeline.enrichers.language import _detector, detect_language
     from omnivore.pipeline.enrichers.ner import _nlp

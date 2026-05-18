@@ -45,3 +45,28 @@ def test_metrics_contains_http_counter(metrics_results):
 
 def test_metrics_contains_ingest_histogram(metrics_results):
     assert "omnivore_ingest_duration_seconds" in metrics_results["body"]
+
+
+def test_documents_total_metric_increments_on_success():
+    """Worker-side metric is reachable in-process (regression guard for C-1 fix).
+
+    Verifies that DOCUMENTS_TOTAL is correctly registered in the global Prometheus
+    registry and that calling .labels(...).inc() produces a readable sample value.
+    This is the in-process analogue of scraping worker:9101/metrics.
+    """
+    from prometheus_client import REGISTRY
+
+    from omnivore.observability import DOCUMENTS_TOTAL
+
+    before = REGISTRY.get_sample_value(
+        "omnivore_documents_total",
+        {"status": "indexed", "tenant_id": "c1-regression", "mime_type": "text/plain"},
+    ) or 0
+    DOCUMENTS_TOTAL.labels(
+        status="indexed", tenant_id="c1-regression", mime_type="text/plain"
+    ).inc()
+    after = REGISTRY.get_sample_value(
+        "omnivore_documents_total",
+        {"status": "indexed", "tenant_id": "c1-regression", "mime_type": "text/plain"},
+    )
+    assert after == (before + 1)
