@@ -16,6 +16,7 @@ from omnivore.db.models import Chunk as ChunkRow
 from omnivore.db.models import Document, ExtractedRow, ExtractedTable, Outbox, Tenant
 from omnivore.db.models import Entity as EntityRow
 from omnivore.db.session import admin_session, tenant_session
+from omnivore.logging_config import configure_logging
 from omnivore.observability import (
     CHUNKS_TOTAL,
     DOCUMENTS_TOTAL,
@@ -404,6 +405,7 @@ async def outbox_relay(ctx: dict) -> dict:
 
 async def on_startup(ctx: dict) -> None:
     settings = get_settings()
+    configure_logging(settings)
     setup_tracing(settings)
     registry.discover()
     from omnivore.pipeline.embeddings import _get_model
