@@ -314,6 +314,31 @@ Each edge is an enqueue. A failed `enrich.embed` retries with exponential backof
 
 PostgreSQL 16 + `pgvector` 0.7+ (HNSW indexes).
 
+> ### ⚠️ Migration safety: 0011 and 0012 are destructive
+>
+> Migrations `0011_partition_chunks.py` and `0012_partition_jobs.py` convert two
+> production tables (`core.chunks`, `core.jobs`) from unpartitioned to partitioned
+> form. The technique is: backup-to-temp-table → `DROP TABLE … CASCADE` → recreate
+> as partitioned → copy data → recreate indexes and FKs → drop backup.
+>
+> Implications for operators upgrading an existing deployment:
+> - **Requires a maintenance window.** The table is dropped and recreated; queries
+>   against the live table during migration will fail or be blocked.
+> - **Index recreation cost scales with row count.** The HNSW index on `chunks.embedding`
+>   and the GIN index on `chunks.content_tsv` are rebuilt from scratch. For multi-million
+>   row tables this can take tens of minutes.
+> - **`downgrade()` is intentionally not implemented.** Reversing the partition
+>   conversion requires manual SQL — see the docstring of each migration.
+> - **HNSW index creation will fail loudly** (since the audit follow-up) if the
+>   `pgvector` extension is not loaded. This is by design: a missing extension would
+>   otherwise produce a "successful" migration with no vector index, causing
+>   catastrophic search latency. Always verify `CREATE EXTENSION vector` is run
+>   before applying migration 0011.
+> - **Recommendation:** test on a snapshot of production data sized to your
+>   expected volume before applying to live. The CI workflow exercises these
+>   against an empty database, which is sufficient for schema correctness but
+>   does not catch index rebuild timing surprises.
+
 ```sql
 -- Tenants
 CREATE TABLE core.tenants (

@@ -61,6 +61,15 @@ def _route_template(request: Request) -> str:
     return "__unmatched__"
 
 
+def _is_valid_pem(value: str, min_length: int) -> bool:
+    """Return True if the value looks like a complete PEM block."""
+    return (
+        len(value) >= min_length
+        and "-----BEGIN" in value
+        and "-----END" in value
+    )
+
+
 async def _poll_queue_depth(arq_pool) -> None:
     """Background task: update QUEUE_DEPTH gauge every 30 s."""
     while True:
@@ -79,21 +88,24 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings)
 
-    # C-2: Validate JWT keys are not truncated (unquoted multi-line PEM in .env
-    # loads only the BEGIN header — 27 chars — breaking the token exchange endpoint).
+    # C-2: Validate JWT keys are non-empty, well-formed PEMs.
+    # Catches (a) unquoted multi-line PEM that loaded only the BEGIN header,
+    # (b) base64 bodies pasted without the BEGIN/END boundary markers.
     _priv = settings.JWT_PRIVATE_KEY_PEM.get_secret_value()
     _pub = settings.JWT_PUBLIC_KEY_PEM
-    if _priv and len(_priv) < 200:
+    if _priv and not _is_valid_pem(_priv, min_length=200):
         raise RuntimeError(
-            "JWT_PRIVATE_KEY_PEM appears truncated (only "
-            f"{len(_priv)} chars). Wrap the full PEM in double quotes in .env — "
-            "see README §2 'Generate the JWT keypair'."
+            f"JWT_PRIVATE_KEY_PEM appears truncated or malformed (length {len(_priv)}). "
+            "Wrap the full PEM in double quotes in .env, including the "
+            "'-----BEGIN PRIVATE KEY-----' and '-----END PRIVATE KEY-----' boundary lines. "
+            "See README §2 'Generate the JWT keypair'."
         )
-    if _pub and len(_pub) < 100:
+    if _pub and not _is_valid_pem(_pub, min_length=100):
         raise RuntimeError(
-            "JWT_PUBLIC_KEY_PEM appears truncated (only "
-            f"{len(_pub)} chars). Wrap the full PEM in double quotes in .env — "
-            "see README §2 'Generate the JWT keypair'."
+            f"JWT_PUBLIC_KEY_PEM appears truncated or malformed (length {len(_pub)}). "
+            "Wrap the full PEM in double quotes in .env, including the "
+            "'-----BEGIN PUBLIC KEY-----' and '-----END PUBLIC KEY-----' boundary lines. "
+            "See README §2 'Generate the JWT keypair'."
         )
 
     # Observability — set up before anything else so early logs get trace_id
