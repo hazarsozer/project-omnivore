@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { Toaster } from "@/components/ui/sonner";
+import { AuthGuard, AppShell } from "@/components/AuthGuard";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,10 +31,11 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
-        <div className="flex h-screen">
-          <SidebarNav />
-          <main className="flex-1 overflow-y-auto">{children}</main>
-        </div>
+        <AuthGuard>
+          <AppShell sidebar={<SidebarNav />}>
+            {children}
+          </AppShell>
+        </AuthGuard>
         <Toaster richColors position="top-right" />
       </body>
     </html>

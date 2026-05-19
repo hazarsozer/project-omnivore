@@ -14,6 +14,9 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
     relabel_configs:
+      # NOTE: This regex assumes COMPOSE_PROJECT_NAME=omnidoc-ingest (the default).
+      # If you run the stack from a differently-named directory or with a custom
+      # COMPOSE_PROJECT_NAME, update this regex to match your actual container names.
       - source_labels: [__meta_docker_container_name]
         regex: "/omnidoc-ingest-(.*)-1"
         target_label: service

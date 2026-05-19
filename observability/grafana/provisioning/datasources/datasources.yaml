@@ -18,7 +18,7 @@ datasources:
     jsonData:
       derivedFields:
         - datasourceUid: omnivore-tempo
-          matcherRegex: '"trace_id":"([a-f0-9]{32})"'
+          matcherRegex: '(?:"trace_id":\s*"|trace_id=)([a-f0-9]{32})'
           name: TraceID
           url: "${__value.raw}"
 

@@ -61,6 +61,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    # L-6: When running with --profile monitoring, set OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
+    # in your .env file (NOT http://localhost:4318 — that resolves to the container itself).
     command: uvicorn omnivore.api.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -70,6 +72,8 @@ services:
     env_file: .env
     volumes:
       - ./src:/app/src
+    # L-6: When running with --profile monitoring, set OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318
+    # in your .env file (NOT http://localhost:4318 — that resolves to the container itself).
     # Port 9101 (Prometheus metrics) is NOT published to the host: Prometheus
     # reaches it via the internal Compose network as "worker:9101". Exposing it
     # to 0.0.0.0 would leak tenant_id-labeled series (the worker /metrics

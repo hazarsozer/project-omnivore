@@ -9,11 +9,26 @@ import type {
   SearchResult,
   UploadResponse,
 } from "./types";
+import {
+  clearAuth,
+  getStoredApiKey,
+  getStoredJWT,
+  setStoredJWT,
+} from "./auth";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+/** Build the auth header using priority: sessionStorage JWT > env API key > none */
+function buildAuthHeader(): Record<string, string> {
+  const jwt = getStoredJWT();
+  if (jwt) return { Authorization: `Bearer ${jwt}` };
+
+  const envKey = process.env.NEXT_PUBLIC_API_KEY;
+  if (envKey) return { "X-API-Key": envKey };
+
+  return {};
+}
 
 export class APIError extends Error {
   status: number;
@@ -25,16 +40,98 @@ export class APIError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
+interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+/** Exchange an API key for a JWT. Does NOT modify stored auth state. */
+async function fetchToken(apiKey: string): Promise<TokenResponse> {
+  const res = await fetch(`${API_BASE}/v1/auth/token`, {
+    method: "POST",
     cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
-      ...(init?.headers ?? {}),
-    },
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
   });
+
+  let body: unknown = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text;
+    }
+  }
+
+  if (!res.ok) {
+    const detail =
+      body && typeof body === "object" && "detail" in body
+        ? String((body as { detail: unknown }).detail)
+        : undefined;
+    throw new APIError(
+      res.status,
+      `HTTP ${res.status} ${res.statusText}`,
+      detail
+    );
+  }
+
+  const env = body as APIResponse<TokenResponse>;
+  if (env && typeof env === "object" && "success" in env) {
+    if (!env.success || !env.data) {
+      throw new APIError(
+        res.status,
+        env.error?.message ?? "Token exchange failed",
+        env.error?.code
+      );
+    }
+    return env.data;
+  }
+
+  // Direct (non-enveloped) response from the token endpoint
+  return body as TokenResponse;
+}
+
+/** Attempt to refresh JWT using the stored API key. Returns true on success. */
+async function tryRefreshJWT(): Promise<boolean> {
+  const storedKey = getStoredApiKey();
+  if (!storedKey) return false;
+  try {
+    const data = await fetchToken(storedKey);
+    setStoredJWT(data.access_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const doRequest = async (): Promise<Response> => {
+    return fetch(`${API_BASE}${path}`, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        ...buildAuthHeader(),
+        ...(init?.headers ?? {}),
+      },
+    });
+  };
+
+  let res = await doRequest();
+
+  // Auto-refresh: if 401 and we have a stored API key, try getting a fresh JWT
+  if (res.status === 401) {
+    const refreshed = await tryRefreshJWT();
+    if (refreshed) {
+      res = await doRequest();
+    }
+    if (res.status === 401) {
+      clearAuth();
+      throw new APIError(401, "Unauthorized — please sign in again");
+    }
+  }
 
   let body: unknown = null;
   const text = await res.text();
@@ -78,6 +175,10 @@ export const api = {
   ready: () => request<Readiness>("/v1/ready"),
   handlers: () => request<Handler[]>("/v1/handlers"),
 
+  /** Exchange an API key for a short-lived JWT. */
+  exchangeToken: (apiKey: string): Promise<TokenResponse> =>
+    fetchToken(apiKey),
+
   listDocuments: (params: { status?: string; limit?: number; cursor?: string } = {}) => {
     const qs = new URLSearchParams();
     if (params.status) qs.set("status", params.status);
@@ -103,13 +204,34 @@ export const api = {
     return await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API_BASE}/v1/documents`);
-      if (API_KEY) xhr.setRequestHeader("X-API-Key", API_KEY);
+
+      // Apply auth header with same priority as request()
+      const authHeader = buildAuthHeader();
+      for (const [key, value] of Object.entries(authHeader)) {
+        xhr.setRequestHeader(key, value);
+      }
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
       };
 
-      xhr.onload = () => {
+      xhr.onload = async () => {
+        // Handle 401 with refresh on XHR path
+        if (xhr.status === 401) {
+          const refreshed = await tryRefreshJWT();
+          if (refreshed) {
+            // Re-issue request with fresh token
+            api
+              .uploadDocument(file, onProgress)
+              .then(resolve)
+              .catch(reject);
+            return;
+          }
+          clearAuth();
+          reject(new APIError(401, "Unauthorized — please sign in again"));
+          return;
+        }
+
         let parsed: unknown = null;
         try {
           parsed = JSON.parse(xhr.responseText);

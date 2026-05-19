@@ -173,9 +173,20 @@ class ExtractedRow(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
-    __table_args__ = {"schema": "core"}
+    # created_at is part of the composite PK because migration 0012 converts
+    # this table to PARTITION BY RANGE (created_at), which requires the
+    # partition key to appear in the primary key constraint.
+    __table_args__ = (
+        Index("idx_jobs_document", "document_id"),
+        Index("idx_jobs_status", "status", "created_at"),
+        {"schema": "core"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    # created_at is the second component of the composite PK (id, created_at).
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), primary_key=True, nullable=False, server_default="now()"
+    )
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("core.documents.id", ondelete="CASCADE")
     )

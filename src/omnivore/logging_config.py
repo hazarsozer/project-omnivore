@@ -14,8 +14,8 @@ def _otel_context_processor(
 ) -> dict[str, Any]:
     """Structlog processor: inject trace_id + span_id from the active OTel span."""
     span = trace.get_current_span()
-    if span.is_recording():
-        ctx = span.get_span_context()
+    ctx = span.get_span_context()
+    if ctx.is_valid:
         event_dict["trace_id"] = format(ctx.trace_id, "032x")
         event_dict["span_id"] = format(ctx.span_id, "016x")
     return event_dict

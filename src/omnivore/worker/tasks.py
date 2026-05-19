@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 import structlog
 from opentelemetry import context as context_api
+from opentelemetry import trace as _otel_trace
 from opentelemetry.trace import StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from prometheus_client import start_http_server
@@ -22,6 +23,8 @@ from omnivore.observability import (
     CHUNKS_TOTAL,
     DOCUMENTS_TOTAL,
     INGEST_DURATION,
+    STORAGE_BYTES_TOTAL,
+    _cap_tenant_id,
     setup_tracing,
 )
 from omnivore.observability import (
@@ -56,7 +59,7 @@ async def ingest_dispatch(
         if _otel_traceparent
         else context_api.get_current()
     )
-    with _get_tracer().start_as_current_span(
+    with _get_tracer("omnivore.worker").start_as_current_span(
         "omnivore.ingest.dispatch",
         context=parent_ctx,
         attributes={
@@ -124,7 +127,7 @@ async def gpu_ingest_dispatch(
         if _otel_traceparent
         else context_api.get_current()
     )
-    with _get_tracer().start_as_current_span(
+    with _get_tracer("omnivore.worker").start_as_current_span(
         "omnivore.gpu_ingest.dispatch",
         context=parent_ctx,
         attributes={
@@ -217,7 +220,7 @@ async def _run_ingest(
             return {"status": "extracting", "document_id": document_id, "reason": "already_claimed"}
         await db.commit()
 
-        with _get_tracer().start_as_current_span(
+        with _get_tracer("omnivore.worker").start_as_current_span(
             "omnivore.ingest.extract",
             attributes={"handler": handler.name, "handler_version": handler.version},
         ) as extract_span:
@@ -228,7 +231,7 @@ async def _run_ingest(
                 extract_span.record_exception(exc)
                 logger.exception("handler.extract.failed", document_id=document_id, handler=handler.name)
                 DOCUMENTS_TOTAL.labels(
-                    status="failed", tenant_id=str(t_id), mime_type=mime
+                    status="failed", tenant_id=_cap_tenant_id(str(t_id)), mime_type=mime
                 ).inc()
                 INGEST_DURATION.labels(
                     handler=handler.name, status="failed"
@@ -242,7 +245,7 @@ async def _run_ingest(
         chunks = chunk_result(result, t_id)
 
         # Language detection
-        with _get_tracer().start_as_current_span("omnivore.ingest.enrich.language"):
+        with _get_tracer("omnivore.worker").start_as_current_span("omnivore.ingest.enrich.language"):
             for chunk in chunks:
                 if chunk.language is None:
                     chunk.language = detect_language(chunk.content)
@@ -294,7 +297,7 @@ async def _run_ingest(
                 db.add(ExtractedRow(table_id=et.id, ordinal=i, data=row, tenant_id=t_id))
 
         # NER — non-fatal
-        with _get_tracer().start_as_current_span(
+        with _get_tracer("omnivore.worker").start_as_current_span(
             "omnivore.ingest.enrich.ner",
             attributes={"chunk_count": len(chunks)},
         ):
@@ -314,7 +317,7 @@ async def _run_ingest(
                 logger.warning("ner.failed", document_id=document_id, exc_info=True)
 
         # LLM summarization — non-fatal
-        with _get_tracer().start_as_current_span("omnivore.ingest.enrich.summarize"):
+        with _get_tracer("omnivore.worker").start_as_current_span("omnivore.ingest.enrich.summarize"):
             api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
             summary = await summarize_document(chunks, api_key=api_key, filename=doc.filename)
 
@@ -331,9 +334,11 @@ async def _run_ingest(
         doc.routing_decision = routing_decision
         await db.commit()
 
+        _capped_tid = _cap_tenant_id(str(t_id))
         for chunk in chunks:
-            CHUNKS_TOTAL.labels(kind=chunk.kind, tenant_id=str(t_id)).inc()
-        DOCUMENTS_TOTAL.labels(status="indexed", tenant_id=str(t_id), mime_type=mime).inc()
+            CHUNKS_TOTAL.labels(kind=chunk.kind, tenant_id=_capped_tid).inc()
+        DOCUMENTS_TOTAL.labels(status="indexed", tenant_id=_capped_tid, mime_type=mime).inc()
+        STORAGE_BYTES_TOTAL.labels(tenant_id=_capped_tid, mime_type=mime).inc(size)
         INGEST_DURATION.labels(handler=handler.name, status="indexed").observe(
             _time.monotonic() - _ingest_start
         )
@@ -425,6 +430,10 @@ async def on_startup(ctx: dict) -> None:
 
 
 async def on_shutdown(ctx: dict) -> None:
+    # M-5: flush pending spans before the worker process exits
+    provider = _otel_trace.get_tracer_provider()
+    if hasattr(provider, "shutdown"):
+        provider.shutdown()
     logger.info("worker.shutdown")
 
 

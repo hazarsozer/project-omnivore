@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { FileText, Search, Settings, Database } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { FileText, Search, Settings, Database, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { clearAuth } from "@/lib/auth";
 
 const ITEMS = [
   { href: "/documents", label: "Documents", icon: FileText },
@@ -13,6 +14,13 @@ const ITEMS = [
 
 export function SidebarNav() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const handleSignOut = () => {
+    clearAuth();
+    router.replace("/login");
+  };
+
   return (
     <aside className="w-60 shrink-0 border-r bg-card flex flex-col">
       <div className="flex items-center gap-2 p-4 border-b">
@@ -39,9 +47,18 @@ export function SidebarNav() {
           );
         })}
       </nav>
-      <div className="p-4 text-xs text-muted-foreground border-t">
-        <div>Phase 3 complete</div>
-        <div className="font-mono mt-1 opacity-60">v0.1.0</div>
+      <div className="p-4 border-t space-y-3">
+        <div className="text-xs text-muted-foreground">
+          <div>Phase 5 complete</div>
+          <div className="font-mono mt-1 opacity-60">v0.1.0</div>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign Out
+        </button>
       </div>
     </aside>
   );

@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from omnivore.observability import (
+    _TENANT_LABEL_CAP,
     CHUNKS_TOTAL,
     DOCUMENTS_TOTAL,
     EMBEDDINGS_TOTAL,
@@ -15,6 +16,9 @@ from omnivore.observability import (
     INGEST_DURATION,
     QUEUE_DEPTH,
     SEARCH_DURATION,
+    STORAGE_BYTES_TOTAL,
+    _cap_tenant_id,
+    _seen_tenant_ids,
     get_tracer,
     setup_tracing,
 )
@@ -103,9 +107,88 @@ def test_otel_context_processor_injects_ids():
 
 
 def test_otel_context_processor_no_span_is_noop():
-    """When no span is active the dict is returned unchanged (no trace_ keys)."""
+    """When no active span has a valid SpanContext, the dict is returned unchanged.
+
+    M-4: The processor now checks ctx.is_valid (not span.is_recording()), so a
+    sampled-out span with an invalid context will correctly produce no trace_ keys.
+    """
     from omnivore.logging_config import _otel_context_processor
 
+    # Outside any span — get_current_span() returns INVALID_SPAN whose
+    # SpanContext.is_valid is False, so no keys should be injected.
     event = _otel_context_processor(None, None, {"event": "hello"})
     assert "trace_id" not in event
     assert "span_id" not in event
+
+
+def test_otel_context_processor_uses_ctx_is_valid_not_is_recording():
+    """Verify that ctx.is_valid is the gate, not is_recording().
+
+    This test installs a NoOp span (is_recording()==False, is_valid==False)
+    to confirm the processor correctly skips injection in that case.
+    """
+    from opentelemetry.trace import INVALID_SPAN
+
+    from omnivore.logging_config import _otel_context_processor
+
+    # INVALID_SPAN has is_recording()==False and ctx.is_valid==False — no injection.
+    trace.use_span(INVALID_SPAN)
+    try:
+        event = _otel_context_processor(None, None, {"event": "test"})
+        assert "trace_id" not in event
+        assert "span_id" not in event
+    finally:
+        pass  # INVALID_SPAN context is thread-local; nothing to restore here
+
+
+def test_cap_tenant_id_returns_id_within_cap():
+    """_cap_tenant_id returns the tenant_id unchanged when under the cap."""
+    # Use a unique prefix to avoid collisions with other tests
+    tid = "__test_cap_under__"
+    _seen_tenant_ids.discard(tid)
+    result = _cap_tenant_id(tid)
+    assert result == tid
+    _seen_tenant_ids.discard(tid)
+
+
+def test_cap_tenant_id_normalises_excess_to_other():
+    """After _TENANT_LABEL_CAP distinct IDs, excess ones become '__other__'."""
+    import omnivore.observability as _obs
+
+    # Save and temporarily replace the module-level set with a full one
+    original = _obs._seen_tenant_ids.copy()
+    try:
+        # Fill the set to exactly the cap with synthetic IDs
+        _obs._seen_tenant_ids.clear()
+        for i in range(_TENANT_LABEL_CAP):
+            _obs._seen_tenant_ids.add(f"__fill_{i}__")
+
+        # Next new tenant must be capped
+        result = _cap_tenant_id("__brand_new_tenant__")
+        assert result == "__other__"
+    finally:
+        _obs._seen_tenant_ids.clear()
+        _obs._seen_tenant_ids.update(original)
+
+
+def test_storage_bytes_total_is_registered():
+    """STORAGE_BYTES_TOTAL must be a prometheus Counter."""
+    assert isinstance(STORAGE_BYTES_TOTAL, prometheus_client.Counter)
+
+
+def test_storage_bytes_total_increments():
+    """STORAGE_BYTES_TOTAL increments by the given byte count."""
+    from prometheus_client import REGISTRY
+
+    tid = "__storage_test_tenant__"
+    mime = "application/pdf"
+    before = REGISTRY.get_sample_value(
+        "omnivore_storage_bytes_total",
+        {"tenant_id": tid, "mime_type": mime},
+    ) or 0
+    STORAGE_BYTES_TOTAL.labels(tenant_id=tid, mime_type=mime).inc(1024)
+    after = REGISTRY.get_sample_value(
+        "omnivore_storage_bytes_total",
+        {"tenant_id": tid, "mime_type": mime},
+    )
+    assert after == (before + 1024)

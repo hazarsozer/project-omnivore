@@ -67,9 +67,39 @@ HTTP_DURATION = prometheus_client.Histogram(
     ["method", "route"],
 )
 
+STORAGE_BYTES_TOTAL = prometheus_client.Counter(
+    "omnivore_storage_bytes_total",
+    "Cumulative bytes of documents ingested",
+    ["tenant_id", "mime_type"],
+)
+
+# ---------------------------------------------------------------------------
+# M-1: Cardinality cap for tenant_id labels — prevents unbounded label explosion.
+# When more than _TENANT_LABEL_CAP distinct tenant IDs have been seen, excess
+# IDs are normalised to "__other__" so Prometheus cardinality stays bounded.
+# ---------------------------------------------------------------------------
+
+_TENANT_LABEL_CAP: int = 200
+_seen_tenant_ids: set[str] = set()
+
+
+def _cap_tenant_id(tenant_id: str) -> str:
+    """Return tenant_id as-is until the cap is reached; then return '__other__'."""
+    if tenant_id in _seen_tenant_ids:
+        return tenant_id
+    if len(_seen_tenant_ids) < _TENANT_LABEL_CAP:
+        _seen_tenant_ids.add(tenant_id)
+        return tenant_id
+    return "__other__"
+
+
 # ---------------------------------------------------------------------------
 # Setup functions — called once at process startup
 # ---------------------------------------------------------------------------
+
+
+def setup_metrics(settings: Settings) -> None:  # noqa: ARG001
+    """No-op: metrics are initialised at import time as module-level singletons."""
 
 
 def setup_tracing(settings: Settings) -> None:
