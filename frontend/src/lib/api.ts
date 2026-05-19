@@ -13,6 +13,8 @@ import type {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+
 export class APIError extends Error {
   status: number;
   detail?: string;
@@ -29,6 +31,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
     headers: {
       Accept: "application/json",
+      ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -100,6 +103,7 @@ export const api = {
     return await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API_BASE}/v1/documents`);
+      if (API_KEY) xhr.setRequestHeader("X-API-Key", API_KEY);
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
