@@ -8,6 +8,7 @@ from typing import Annotated
 import structlog
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
+from opentelemetry import trace as _otel_trace
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,10 +32,16 @@ async def require_auth(
     bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
 ) -> AuthContext:
     if api_key_header:
-        return await _resolve_api_key(api_key_header)
-    if bearer:
-        return await _resolve_jwt(bearer.credentials)
-    raise InvalidCredentialsError()
+        ctx = await _resolve_api_key(api_key_header)
+    elif bearer:
+        ctx = await _resolve_jwt(bearer.credentials)
+    else:
+        raise InvalidCredentialsError()
+    span = _otel_trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute("tenant_id", str(ctx.tenant_id))
+        span.set_attribute("principal_type", ctx.principal_type)
+    return ctx
 
 
 def require_scope(scope: str):
