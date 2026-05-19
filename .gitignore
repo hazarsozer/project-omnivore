@@ -1,0 +1,3 @@
+# Prometheus bearer token for /metrics scraping — must NOT be committed.
+# Use observability/auth_token.example as a template.
+observability/auth_token

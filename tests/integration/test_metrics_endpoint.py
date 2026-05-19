@@ -146,12 +146,12 @@ def metrics_auth_results():
     return results
 
 
-def test_metrics_no_auth_returns_403(metrics_auth_results):
-    assert metrics_auth_results["no_auth_status"] == 403
+def test_metrics_no_auth_returns_401(metrics_auth_results):
+    assert metrics_auth_results["no_auth_status"] == 401
 
 
-def test_metrics_wrong_token_returns_403(metrics_auth_results):
-    assert metrics_auth_results["wrong_token_status"] == 403
+def test_metrics_wrong_token_returns_401(metrics_auth_results):
+    assert metrics_auth_results["wrong_token_status"] == 401
 
 
 def test_metrics_correct_token_returns_200(metrics_auth_results):

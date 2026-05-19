@@ -2,24 +2,28 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Bearer token for /metrics scraping is read from a file mounted into the
+# Prometheus container by docker-compose.yml. Prometheus does NOT expand
+# ${VAR} references in authorization.credentials — the credentials_file
+# pattern is the idiomatic way to inject a secret into the scrape config.
 scrape_configs:
   - job_name: omnivore-api
     static_configs:
       - targets: ["api:8000"]
     metrics_path: /metrics
     authorization:
-      credentials: "${METRICS_AUTH_TOKEN}"
+      credentials_file: /etc/prometheus/auth_token
 
   - job_name: omnivore-worker
     static_configs:
       - targets: ["worker:9101"]
     metrics_path: /metrics
     authorization:
-      credentials: "${METRICS_AUTH_TOKEN}"
+      credentials_file: /etc/prometheus/auth_token
 
   - job_name: omnivore-worker-gpu
     static_configs:
       - targets: ["worker-gpu:9102"]
     metrics_path: /metrics
     authorization:
-      credentials: "${METRICS_AUTH_TOKEN}"
+      credentials_file: /etc/prometheus/auth_token

@@ -128,11 +128,15 @@ except Exception:
 async def metrics_endpoint(request: Request) -> Response:
     settings = get_settings()
     token = settings.METRICS_AUTH_TOKEN
-    if token is not None:
+    # Treat empty token as "no auth configured" — guards against misconfiguration
+    # where METRICS_AUTH_TOKEN="" would otherwise accept "Bearer " as a match.
+    if token is not None and token.get_secret_value():
         auth_header = request.headers.get("Authorization", "")
         expected = f"Bearer {token.get_secret_value()}"
         if not secrets.compare_digest(auth_header, expected):
-            return Response(status_code=403)
+            # 401 Unauthorized + WWW-Authenticate is the correct semantic for
+            # "no/invalid auth credentials"; 403 would mean "auth ok but denied".
+            return Response(status_code=401, headers={"WWW-Authenticate": "Bearer"})
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 app.include_router(health.router, prefix="/v1")

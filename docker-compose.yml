@@ -70,8 +70,10 @@ services:
     env_file: .env
     volumes:
       - ./src:/app/src
-    ports:
-      - "9101:9101"
+    # Port 9101 (Prometheus metrics) is NOT published to the host: Prometheus
+    # reaches it via the internal Compose network as "worker:9101". Exposing it
+    # to 0.0.0.0 would leak tenant_id-labeled series (the worker /metrics
+    # endpoint is unauthenticated — see prometheus_client.start_http_server).
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,8 +95,9 @@ services:
     env_file: .env
     volumes:
       - ./src:/app/src
-    ports:
-      - "9102:9102"
+    # Port 9102 (Prometheus metrics) is NOT published to the host — same reason
+    # as the `worker` service above. Prometheus scrapes via "worker-gpu:9102"
+    # over the internal Compose network.
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +134,10 @@ services:
     profiles: [monitoring]
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Bearer token for /metrics scraping. File contains the raw token (no
+      # "Bearer " prefix). Generate with: openssl rand -hex 32 > observability/auth_token
+      # Must match METRICS_AUTH_TOKEN in the API's .env. The file is gitignored.
+      - ./observability/auth_token:/etc/prometheus/auth_token:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
