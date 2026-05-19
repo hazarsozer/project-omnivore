@@ -14,6 +14,7 @@ Run monthly (e.g. first day of the month via cron):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from calendar import monthrange
@@ -89,43 +90,56 @@ def get_database_url() -> str:
 
 
 def asyncpg_url(database_url: str) -> str:
-    """Return the URL with the asyncpg driver prefix (what config.py stores)."""
+    """Ensure the URL uses the postgresql+asyncpg:// scheme."""
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return database_url
 
 
-def sync_url(database_url: str) -> str:
-    """Convert an asyncpg URL to a plain psycopg2-compatible postgresql:// URL."""
-    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+async def _run_sql(database_url: str, sql: str) -> None:
+    """Execute SQL using the asyncpg driver (no psycopg2 required)."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    url = asyncpg_url(database_url)
+    engine = create_async_engine(url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text(sql))
+            await conn.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _check_exists(database_url: str, year: int, month: int) -> bool:
+    """Return True if the partition table already exists in core schema."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    name = partition_name(year, month)
+    url = asyncpg_url(database_url)
+    engine = create_async_engine(url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'core' AND c.relname = :tname"
+                ),
+                {"tname": name},
+            )
+            return result.fetchone() is not None
+    finally:
+        await engine.dispose()
 
 
 def execute_sql(database_url: str, sql: str) -> None:
-    """Execute SQL using sqlalchemy with a sync engine (no asyncio required)."""
-    from sqlalchemy import create_engine, text
-
-    url = sync_url(database_url)
-    engine = create_engine(url, echo=False, future=True)
-    with engine.connect() as conn:
-        conn.execute(text(sql))
-        conn.commit()
+    asyncio.run(_run_sql(database_url, sql))
 
 
 def partition_exists(database_url: str, year: int, month: int) -> bool:
-    """Return True if the partition table already exists in core schema."""
-    from sqlalchemy import create_engine, text
-
-    name = partition_name(year, month)
-    url = sync_url(database_url)
-    engine = create_engine(url, echo=False, future=True)
-    with engine.connect() as conn:
-        result = conn.execute(
-            text(
-                "SELECT 1 FROM pg_class c "
-                "JOIN pg_namespace n ON n.oid = c.relnamespace "
-                "WHERE n.nspname = 'core' AND c.relname = :tname"
-            ),
-            {"tname": name},
-        )
-        return result.fetchone() is not None
+    return asyncio.run(_check_exists(database_url, year, month))
 
 
 def main() -> int:

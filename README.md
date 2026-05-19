@@ -53,9 +53,20 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
 openssl rsa -pubout -in private.pem -out public.pem
 ```
 
-Then open `.env` and:
-- Set `JWT_PRIVATE_KEY_PEM` to the full content of `private.pem` (the `-----BEGIN PRIVATE KEY-----` block). Multi-line PEM is fine — pydantic-settings reads it correctly.
-- Set `JWT_PUBLIC_KEY_PEM` to the full content of `public.pem`.
+Then open `.env` and set the two PEM fields. **The values must be wrapped in double quotes** so the `.env` parser preserves the line breaks:
+
+```
+JWT_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----
+MIIEvQIBADA...
+-----END PRIVATE KEY-----"
+
+JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----
+MIIBIjANBg...
+-----END PUBLIC KEY-----"
+```
+
+- Set `JWT_PRIVATE_KEY_PEM` to the full content of `private.pem` (quoted as shown above).
+- Set `JWT_PUBLIC_KEY_PEM` to the full content of `public.pem` (quoted as shown above).
 - Set `ADMIN_BOOTSTRAP_TOKEN` to a strong random string:
   ```bash
   openssl rand -hex 32
@@ -146,9 +157,10 @@ openssl rand -hex 32 > observability/auth_token
 echo "METRICS_AUTH_TOKEN=$(cat observability/auth_token)" >> .env
 
 docker compose --profile monitoring up -d
-# Grafana: http://localhost:3000 (anonymous Admin access, no login required)
+# Grafana: http://localhost:3001 (anonymous Admin access, no login required)
 # Prometheus: http://localhost:9090
 # Tempo: http://localhost:3200
+# Note: Grafana runs on port 3001 to avoid conflict with the frontend dev server on 3000.
 ```
 
 Three dashboards are auto-provisioned in Grafana: Pipeline Overview, Search Latency, and Tenant Activity.
@@ -164,7 +176,7 @@ Three dashboards are auto-provisioned in Grafana: Pipeline Overview, Search Late
 | ARQ CPU worker | — | `uv run python -m omnivore.worker.main` |
 | ARQ GPU worker | — | `uv run python -m omnivore.worker.gpu_main` |
 | Next.js frontend | 3000 | `cd frontend && npm run dev` |
-| Grafana | 3000 (monitoring profile) | `docker compose --profile monitoring up -d` |
+| Grafana | 3001 (monitoring profile) | `docker compose --profile monitoring up -d` |
 | Prometheus | 9090 | (same) |
 | Tempo | 4318 / 3200 | (same) |
 
@@ -223,7 +235,7 @@ All settings are read from `.env` via pydantic-settings. See `src/omnivore/confi
 | `JWT_PUBLIC_KEY_PEM` | _(empty)_ | RSA public key PEM — required for auth |
 | `JWT_ALGORITHM` | `RS256` | JWT signing algorithm |
 | `JWT_ACCESS_TOKEN_EXPIRE_SECONDS` | `3600` | JWT TTL in seconds |
-| `ADMIN_BOOTSTRAP_TOKEN` | `change-me-admin-token` | Root admin token — change before first run |
+| `ADMIN_BOOTSTRAP_TOKEN` | `change-me-before-first-run` | Root admin token — change before first run |
 | `RL_CAPACITY` | `100` | Rate limiter: max burst tokens per tenant |
 | `RL_REFILL_RATE` | `10.0` | Rate limiter: tokens per second refill rate |
 | `RL_UPLOAD_COST` | `10` | Tokens consumed per document upload |
@@ -233,7 +245,7 @@ All settings are read from `.env` via pydantic-settings. See `src/omnivore/confi
 | `MAX_QUEUE_DEPTH` | `100` | CPU queue depth before HTTP 429 |
 | `MAX_GPU_QUEUE_DEPTH` | `20` | GPU queue depth before HTTP 429 |
 | `IMAGE_OCR_LANGUAGES` | `["en"]` | Default EasyOCR language list |
-| `OTEL_ENABLED` | `true` | Enable OpenTelemetry tracing |
+| `OTEL_ENABLED` | `false` | Enable OpenTelemetry tracing (set `true` with `--profile monitoring`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | OTLP collector endpoint |
 | `OTEL_SERVICE_NAME` | `omnivore` | Service name in traces |
 | `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |

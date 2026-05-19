@@ -11,6 +11,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -329,8 +330,17 @@ async def delete_document(
     except Exception:
         logger.warning("document.s3_delete_failed", document_id=str(document_id), storage_uri=storage_uri)
 
-    # Delete document row — FK CASCADE handles chunks, entities, extracted_tables,
-    # extracted_rows, jobs, and outbox entries automatically
+    # Outbox has no FK to documents (by design — aggregate_id is untyped).
+    # Clean up any unpublished outbox entries to prevent the outbox_relay from
+    # trying to re-enqueue a job for a document that no longer exists.
+    await db.execute(
+        sa_delete(Outbox).where(
+            Outbox.aggregate_id == document_id,
+            Outbox.published_at.is_(None),
+        )
+    )
+
+    # FK CASCADE handles chunks, entities, extracted_tables, extracted_rows, jobs.
     await db.delete(doc)
     await db.commit()
 

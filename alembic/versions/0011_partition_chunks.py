@@ -140,21 +140,17 @@ def upgrade() -> None:
     )
 
     # HNSW index — partial, matching the definition from migration 0009.
-    # pgvector must be loaded and the extension must exist; if it is not
-    # available (e.g., test environment without pgvector), we swallow the
-    # error so the rest of the migration succeeds.  The index can be
-    # recreated later once pgvector is available.
-    try:
-        op.execute(
-            """
-            CREATE INDEX idx_chunks_embedding ON core.chunks
-                USING hnsw (embedding vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-                WHERE embedding IS NOT NULL AND 'vector' = ANY(sinks)
-            """
-        )
-    except Exception:  # noqa: BLE001
-        pass
+    # Requires the pgvector extension to be loaded. This project's Docker image
+    # (pgvector/pgvector:pg16) includes it by default; if you see an error here,
+    # verify that the pgvector extension is installed in your PostgreSQL instance.
+    op.execute(
+        """
+        CREATE INDEX idx_chunks_embedding ON core.chunks
+            USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64)
+            WHERE embedding IS NOT NULL AND 'vector' = ANY(sinks)
+        """
+    )
 
     # ------------------------------------------------------------------ #
     # 8. Recreate FK from entities → chunks                               #

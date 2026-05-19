@@ -182,7 +182,8 @@ services:
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      # Port 3001 to avoid conflict with the Next.js frontend dev server on 3000
+      - "3001:3000"
     depends_on:
       - prometheus
       - loki

@@ -120,4 +120,4 @@ jobs:
           ENVIRONMENT: test
           OTEL_ENABLED: "false"
           LOG_LEVEL: WARNING
-        run: uv run pytest tests/ -q -m "not integration"
+        run: uv run pytest tests/ -q

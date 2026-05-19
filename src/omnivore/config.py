@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     JWT_PUBLIC_KEY_PEM: str = ""
     JWT_ALGORITHM: str = "RS256"
     JWT_ACCESS_TOKEN_EXPIRE_SECONDS: int = 3600  # 1 hour
-    ADMIN_BOOTSTRAP_TOKEN: SecretStr = SecretStr("change-me-admin-token")
+    ADMIN_BOOTSTRAP_TOKEN: SecretStr = SecretStr("change-me-before-first-run")
 
     # Phase 4 — Rate limiting (token bucket, per-tenant defaults)
     RL_CAPACITY: int = 100          # max burst tokens
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: list[str] = ["*"]
 
     # Phase 5 — Observability
-    OTEL_ENABLED: bool = True
+    OTEL_ENABLED: bool = False
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
     OTEL_SERVICE_NAME: str = "omnivore"
     METRICS_ENABLED: bool = True
