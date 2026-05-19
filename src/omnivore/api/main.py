@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from contextlib import asynccontextmanager
 
@@ -55,8 +56,8 @@ def _route_template(request: Request) -> str:
     for route in request.app.routes:
         match, _ = route.matches(request.scope)
         if match == Match.FULL:
-            return getattr(route, "path", request.url.path)
-    return request.url.path
+            return getattr(route, "path", "__unknown__")
+    return "__unmatched__"
 
 
 async def _poll_queue_depth(arq_pool) -> None:
@@ -124,7 +125,14 @@ except Exception:
 
 # Prometheus /metrics endpoint — explicit route avoids Starlette's mount trailing-slash redirect
 @app.get("/metrics", include_in_schema=False)
-async def metrics_endpoint() -> Response:
+async def metrics_endpoint(request: Request) -> Response:
+    settings = get_settings()
+    token = settings.METRICS_AUTH_TOKEN
+    if token is not None:
+        auth_header = request.headers.get("Authorization", "")
+        expected = f"Bearer {token.get_secret_value()}"
+        if not secrets.compare_digest(auth_header, expected):
+            return Response(status_code=403)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 app.include_router(health.router, prefix="/v1")

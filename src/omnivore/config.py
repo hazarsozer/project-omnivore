@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
     OTEL_SERVICE_NAME: str = "omnivore"
     METRICS_ENABLED: bool = True
+    METRICS_AUTH_TOKEN: SecretStr | None = None
 
 
 @lru_cache

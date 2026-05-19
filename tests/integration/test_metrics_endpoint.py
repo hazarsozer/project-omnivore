@@ -5,11 +5,13 @@ Uses ASGITransport — no real Prometheus needed.
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from omnivore.api.main import app
+from omnivore.config import get_settings
 from omnivore.pipeline.registry import registry
 
 
@@ -70,3 +72,91 @@ def test_documents_total_metric_increments_on_success():
         {"status": "indexed", "tenant_id": "c1-regression", "mime_type": "text/plain"},
     )
     assert after == (before + 1)
+
+
+# ---------------------------------------------------------------------------
+# H-3: Route cardinality — unmatched paths must not pollute metric labels
+# ---------------------------------------------------------------------------
+
+
+def test_unmatched_route_label():
+    """Requests to unknown paths are labelled route='__unmatched__' in /metrics."""
+    results: dict = {}
+
+    async def _run():
+        registry.discover()
+        app.state.arq_pool = None
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            # Hit a path that doesn't exist — triggers __unmatched__ label
+            await c.get("/nonexistent-path-xyz")
+            r = await c.get("/metrics")
+            results["body"] = r.text
+
+    asyncio.run(_run())
+    assert 'route="__unmatched__"' in results["body"]
+
+
+# ---------------------------------------------------------------------------
+# H-4: /metrics bearer token auth
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def metrics_auth_results():
+    """Run /metrics requests with METRICS_AUTH_TOKEN set to 'test-secret-token'."""
+    results: dict = {}
+
+    async def _run():
+        registry.discover()
+        app.state.arq_pool = None
+
+        get_settings.cache_clear()
+        with patch.dict(
+            "os.environ",
+            {"METRICS_AUTH_TOKEN": "test-secret-token"},
+            clear=False,
+        ):
+            get_settings.cache_clear()
+            try:
+                async with AsyncClient(
+                    transport=ASGITransport(app=app), base_url="http://test"
+                ) as c:
+                    # No auth header → 403
+                    r_no_auth = await c.get("/metrics")
+                    results["no_auth_status"] = r_no_auth.status_code
+
+                    # Wrong token → 403
+                    r_wrong = await c.get(
+                        "/metrics", headers={"Authorization": "Bearer wrong-token"}
+                    )
+                    results["wrong_token_status"] = r_wrong.status_code
+
+                    # Correct token → 200
+                    r_ok = await c.get(
+                        "/metrics",
+                        headers={"Authorization": "Bearer test-secret-token"},
+                    )
+                    results["ok_status"] = r_ok.status_code
+                    results["ok_body"] = r_ok.text
+            finally:
+                get_settings.cache_clear()
+
+    asyncio.run(_run())
+    return results
+
+
+def test_metrics_no_auth_returns_403(metrics_auth_results):
+    assert metrics_auth_results["no_auth_status"] == 403
+
+
+def test_metrics_wrong_token_returns_403(metrics_auth_results):
+    assert metrics_auth_results["wrong_token_status"] == 403
+
+
+def test_metrics_correct_token_returns_200(metrics_auth_results):
+    assert metrics_auth_results["ok_status"] == 200
+
+
+def test_metrics_correct_token_body_is_prometheus(metrics_auth_results):
+    assert "omnivore_http_requests_total" in metrics_auth_results["ok_body"]
