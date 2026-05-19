@@ -1,4 +1,4 @@
-"""Unit tests for api/routes/documents.py — upload, dedup, get, list."""
+"""Unit tests for api/routes/documents.py — upload, dedup, get, list, delete."""
 from __future__ import annotations
 
 import io
@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from omnivore.api.routes.documents import (
+    delete_document,
     get_document,
     get_document_entities,
     list_documents,
@@ -808,3 +809,114 @@ async def test_get_entities_returns_empty_list_when_no_entities():
     assert resp.success is True
     assert resp.data == []
     assert resp.meta["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# DELETE /documents/{document_id}
+# ---------------------------------------------------------------------------
+
+def _make_db_with_delete(doc=None) -> AsyncMock:
+    db = _make_db(get_return=doc)
+    db.delete = AsyncMock()
+    return db
+
+
+async def test_delete_document_returns_200():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "indexed"
+    db = _make_db_with_delete(doc)
+    mock_session, mock_s3 = _mock_s3_session()
+    mock_s3.delete_object = AsyncMock()
+
+    with (
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+    ):
+        resp = await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    assert resp.success is True
+    assert resp.data["document_id"] == str(doc_id)
+    assert resp.data["deleted"] is True
+    db.delete.assert_awaited_once_with(doc)
+    db.commit.assert_awaited_once()
+
+
+async def test_delete_document_not_found_returns_404():
+    db = _make_db_with_delete(doc=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_document(document_id=uuid.uuid4(), db=db, auth=_make_auth())
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_delete_document_in_progress_returns_409():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "extracting"
+    db = _make_db_with_delete(doc)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    assert exc_info.value.status_code == 409
+    assert "currently being processed" in exc_info.value.detail
+    db.delete.assert_not_called()
+
+
+async def test_delete_document_enriching_returns_409():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "enriching"
+    db = _make_db_with_delete(doc)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    assert exc_info.value.status_code == 409
+
+
+async def test_delete_document_routing_returns_409():
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "routing"
+    db = _make_db_with_delete(doc)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    assert exc_info.value.status_code == 409
+
+
+async def test_delete_document_s3_failure_is_best_effort():
+    """S3 delete failure must not block the DB delete."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.status = "failed"
+    db = _make_db_with_delete(doc)
+    mock_session, mock_s3 = _mock_s3_session()
+    mock_s3.delete_object = AsyncMock(side_effect=Exception("NoSuchKey"))
+
+    with (
+        patch("omnivore.api.routes.documents.get_settings", return_value=_mock_settings()),
+        patch("omnivore.api.routes.documents.aioboto3.Session", return_value=mock_session),
+    ):
+        resp = await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    # DB delete still proceeds even though S3 threw
+    assert resp.success is True
+    db.delete.assert_awaited_once_with(doc)
+
+
+async def test_delete_document_wrong_tenant_returns_404():
+    """Document belonging to a different tenant must return 404."""
+    doc_id = uuid.uuid4()
+    doc = _make_doc(doc_id)
+    doc.tenant_id = uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")  # different tenant
+    db = _make_db_with_delete(doc)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await delete_document(document_id=doc_id, db=db, auth=_make_auth())
+
+    assert exc_info.value.status_code == 404

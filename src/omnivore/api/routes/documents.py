@@ -289,7 +289,56 @@ async def list_documents(
     )
 
 
+_IN_PROGRESS_STATUSES = frozenset({"extracting", "enriching", "routing"})
 _ALLOWED_RETRY_TASKS = frozenset({"ingest_dispatch", "gpu_ingest_dispatch"})
+
+
+@router.delete("/{document_id}", status_code=200)
+async def delete_document(
+    document_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
+    auth: Annotated[AuthContext, Depends(require_scope("documents:write"))],
+    _rl: Annotated[None, Depends(rate_limited())] = None,
+) -> APIResponse[dict]:
+    doc = await db.get(Document, document_id)
+    if doc is None or doc.tenant_id != auth.tenant_id:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.status in _IN_PROGRESS_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="Document is currently being processed — wait for it to complete or fail before deleting",
+        )
+
+    # Delete from object storage — best-effort (object may already be gone)
+    settings = get_settings()
+    storage_uri = doc.storage_uri
+    try:
+        without_scheme = storage_uri.removeprefix("s3://")
+        bucket, _, key = without_scheme.partition("/")
+        endpoint = f"{'https' if settings.MINIO_SECURE else 'http'}://{settings.MINIO_ENDPOINT}"
+        s3_session = aioboto3.Session()
+        async with s3_session.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=settings.MINIO_ACCESS_KEY,
+            aws_secret_access_key=settings.MINIO_SECRET_KEY.get_secret_value(),
+            region_name="us-east-1",
+        ) as s3:
+            await s3.delete_object(Bucket=bucket, Key=key)
+    except Exception:
+        logger.warning("document.s3_delete_failed", document_id=str(document_id), storage_uri=storage_uri)
+
+    # Delete document row — FK CASCADE handles chunks, entities, extracted_tables,
+    # extracted_rows, jobs, and outbox entries automatically
+    await db.delete(doc)
+    await db.commit()
+
+    logger.info("document.deleted", document_id=str(document_id), tenant_id=str(auth.tenant_id))
+    return APIResponse(
+        success=True,
+        data={"document_id": str(document_id), "deleted": True},
+    )
 
 
 @router.post("/{document_id}/retry", status_code=202)

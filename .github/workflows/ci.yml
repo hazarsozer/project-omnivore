@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: omnivore
+          POSTGRES_PASSWORD: omnivore
+          POSTGRES_DB: omnivore
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Start MinIO
+        run: |
+          docker run -d \
+            --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=omnivore \
+            -e MINIO_ROOT_PASSWORD=omnivore123 \
+            minio/minio:latest server /data
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:9000/minio/health/live; then
+              echo "MinIO is ready"
+              break
+            fi
+            echo "Waiting for MinIO... ($i/20)"
+            sleep 3
+          done
+
+      - name: Generate JWT keypair
+        id: gen_jwt
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem
+          openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem
+          {
+            echo 'private_key<<EOF'
+            cat /tmp/private.pem
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo 'public_key<<EOF'
+            cat /tmp/public.pem
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://omnivore:omnivore@localhost:5432/omnivore
+          REDIS_URL: redis://localhost:6379/0
+          MINIO_ENDPOINT: localhost:9000
+          MINIO_ACCESS_KEY: omnivore
+          MINIO_SECRET_KEY: omnivore123
+          MINIO_BUCKET: omnivore-raw
+          MINIO_SECURE: "false"
+          ADMIN_BOOTSTRAP_TOKEN: test-admin-bootstrap-for-integration-only
+          JWT_ALGORITHM: RS256
+          JWT_ACCESS_TOKEN_EXPIRE_SECONDS: "3600"
+          JWT_PRIVATE_KEY_PEM: ${{ steps.gen_jwt.outputs.private_key }}
+          JWT_PUBLIC_KEY_PEM: ${{ steps.gen_jwt.outputs.public_key }}
+          ENVIRONMENT: test
+          OTEL_ENABLED: "false"
+          LOG_LEVEL: WARNING
+        run: uv run alembic upgrade head
+
+      - name: Run ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://omnivore:omnivore@localhost:5432/omnivore
+          REDIS_URL: redis://localhost:6379/0
+          MINIO_ENDPOINT: localhost:9000
+          MINIO_ACCESS_KEY: omnivore
+          MINIO_SECRET_KEY: omnivore123
+          MINIO_BUCKET: omnivore-raw
+          MINIO_SECURE: "false"
+          ADMIN_BOOTSTRAP_TOKEN: test-admin-bootstrap-for-integration-only
+          JWT_ALGORITHM: RS256
+          JWT_ACCESS_TOKEN_EXPIRE_SECONDS: "3600"
+          JWT_PRIVATE_KEY_PEM: ${{ steps.gen_jwt.outputs.private_key }}
+          JWT_PUBLIC_KEY_PEM: ${{ steps.gen_jwt.outputs.public_key }}
+          ENVIRONMENT: test
+          OTEL_ENABLED: "false"
+          LOG_LEVEL: WARNING
+        run: uv run pytest tests/ -q -m "not integration"

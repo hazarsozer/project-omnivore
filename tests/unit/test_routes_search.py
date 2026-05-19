@@ -273,3 +273,48 @@ async def test_search_result_null_heading_path():
         )
 
     assert resp.data[0].heading_path is None
+
+
+# ---------------------------------------------------------------------------
+# Sinks filter — SQL contains the required 'relational'/'vector' guards
+# ---------------------------------------------------------------------------
+
+from omnivore.api.routes.search import _bm25_search, _hybrid_search, _vector_search  # noqa: E402
+
+
+def _get_sql_string(db: AsyncMock) -> str:
+    """Extract the SQL string that was passed to db.execute()."""
+    call_args = db.execute.call_args
+    sql_arg = call_args[0][0]  # first positional arg to execute()
+    return str(sql_arg)
+
+
+async def test_bm25_search_sql_contains_relational_sinks_filter():
+    """_bm25_search must filter chunks WHERE 'relational' = ANY(c.sinks)."""
+    db = _make_db([])
+
+    await _bm25_search(db, "query", _TEST_TENANT_ID, 10)
+
+    sql = _get_sql_string(db)
+    assert "'relational' = ANY(c.sinks)" in sql, f"Missing sinks filter in BM25 SQL: {sql}"
+
+
+async def test_vector_search_sql_contains_vector_sinks_filter():
+    """_vector_search must filter chunks WHERE 'vector' = ANY(c.sinks)."""
+    db = _make_db([])
+
+    await _vector_search(db, _VEC, _TEST_TENANT_ID, 10)
+
+    sql = _get_sql_string(db)
+    assert "'vector' = ANY(c.sinks)" in sql, f"Missing sinks filter in vector SQL: {sql}"
+
+
+async def test_hybrid_search_sql_contains_both_sinks_filters():
+    """_hybrid_search CTEs must filter: bm25 on relational, vec on vector."""
+    db = _make_db([])
+
+    await _hybrid_search(db, "query", _VEC, _TEST_TENANT_ID, 10)
+
+    sql = _get_sql_string(db)
+    assert "'relational' = ANY(c.sinks)" in sql, f"Missing relational sinks filter in hybrid SQL: {sql}"
+    assert "'vector' = ANY(sinks)" in sql, f"Missing vector sinks filter in hybrid SQL: {sql}"

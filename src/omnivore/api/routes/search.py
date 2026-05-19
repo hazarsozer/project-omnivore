@@ -94,6 +94,7 @@ async def _bm25_search(
              plainto_tsquery('simple', :query) AS q
         WHERE c.tenant_id = :tenant_id
           AND c.content_tsv @@ q
+          AND 'relational' = ANY(c.sinks)
         ORDER BY score DESC
         LIMIT :top_k
     """)
@@ -116,6 +117,7 @@ async def _vector_search(
         FROM core.chunks c
         WHERE c.tenant_id = :tenant_id
           AND c.embedding IS NOT NULL
+          AND 'vector' = ANY(c.sinks)
         ORDER BY c.embedding <=> CAST(:vec AS vector(768))
         LIMIT :top_k
     """)
@@ -136,6 +138,7 @@ async def _hybrid_search(
                  plainto_tsquery('simple', :query) AS q
             WHERE c.tenant_id = :tenant_id
               AND c.content_tsv @@ q
+              AND 'relational' = ANY(c.sinks)
             ORDER BY ts_rank(c.content_tsv, q) DESC
             LIMIT :pre_k
         ),
@@ -145,6 +148,7 @@ async def _hybrid_search(
             FROM core.chunks
             WHERE tenant_id = :tenant_id
               AND embedding IS NOT NULL
+              AND 'vector' = ANY(sinks)
             ORDER BY embedding <=> CAST(:vec AS vector(768))
             LIMIT :pre_k
         ),

@@ -1,146 +1,289 @@
-# Omnivore
+# Omnivore — self-hosted document ingestion pipeline for RAG
 
-A Postgres-native document ingestion pipeline for RAG systems. Upload text documents and structured data — PDF, DOCX, spreadsheets, HTML, JSON — and get back structured intelligence stored directly in PostgreSQL: chunked text with full lineage, extracted tables queryable as SQL, and rich metadata. No separate vector database required.
+Omnivore is a Postgres-native document ingestion pipeline for RAG systems. Upload any file — PDF, Word doc, spreadsheet, audio recording, scanned image — and get back structured intelligence stored directly in PostgreSQL: chunked text with embeddings, extracted tables queryable as SQL, named entities, language-detected content, and LLM-generated summaries. No separate vector database required.
 
-> **Current state (Phase 2c Done):** Phase 1 text + structured-data formats work end-to-end. Phase 2 (BGE-base embeddings + BM25/vector/RRF) shipped 2026-05-07. Phase 2b (audio/video/image-OCR + GPU worker + bakeoff) shipped 2026-05-07. Phase 2c (blob streaming, multilingual OCR with LRU-bounded reader cache + lang allowlist, expanded eval to 53 chunks / 39 queries, backpressure + idempotency + DLQ, queue-name alignment fix) shipped 2026-05-08 — 164 unit tests, 6 E2E tests, `ruff` clean. **Bakeoff verdict: bge-base ≈ bge-m3 on the 53-chunk corpus (t=0.514, not significant at p<0.05) — destructive vector resize unjustified.** Architect audits closed for all three. See [`docs/phase2-audit.md`](docs/phase2-audit.md), [`docs/phase2b-audit.md`](docs/phase2b-audit.md), [`eval/results/README.md`](eval/results/README.md).
+It is designed to be cloned and run on your own infrastructure. There are no hosted services, no calling home, and no vendor dependencies beyond the models you choose to run.
 
-## What works today
+## Features
 
-```
-You upload a file (PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX)
-        │
-        ▼
-Omnivore detects the format, routes it to the right handler,
-extracts text blocks and tables, chunks content structure-first,
-and stores everything in PostgreSQL.
-        │
-        ▼
-You query chunks and tables — SQL JOINs across document text
-and extracted spreadsheet rows from one database.
-```
+| Feature | Details |
+|---|---|
+| Document formats | PDF, DOCX, TXT, MD, HTML, JSON, CSV, TSV, XLSX |
+| Audio transcription | MP3, WAV, M4A, FLAC, OGG, WebM — via faster-whisper |
+| Video transcription | MP4, MOV, MKV, AVI, WEBM, OGV — ffmpeg + faster-whisper |
+| Image OCR | JPEG, PNG, WEBP, TIFF, BMP, GIF — via EasyOCR (multilingual) |
+| Embeddings | BGE-base-en-v1.5 (768-dim), runs fully local via sentence-transformers |
+| Hybrid search | BM25 + pgvector + RRF merge via `POST /v1/search` |
+| Structure-first chunking | Section boundaries respected; 512-token max, 64-token overlap |
+| Named entity recognition | People, orgs, locations, dates — spaCy en_core_web_sm |
+| LLM summaries | Abstractive summary per document — Claude Haiku, gated on `ANTHROPIC_API_KEY` |
+| Language detection | Per-chunk language detection via lingua |
+| Routing policies | Declarative per-tenant rules controlling which sinks receive chunks |
+| Multi-tenancy | Row-level security enforced in PostgreSQL; all data is tenant-isolated |
+| Auth | API key (Argon2id hash) + RS256 JWT exchange; fine-grained scopes |
+| Rate limiting | Lua token-bucket per tenant; configurable capacity and refill rate |
+| Observability | OTel traces → Tempo, Prometheus metrics, structlog JSON → Loki, Grafana dashboards (opt-in) |
+| Admin frontend | Next.js 15 app at `frontend/` — upload, search, document detail, admin views |
 
-## Supported formats
+Not built (do not expect): PPTX/email/archive handlers, billing or quota tiers, sentiment/classification, RAPTOR/GraphRAG, ColPali visual retrieval.
 
-| Category | Formats | Status |
-|---|---|---|
-| Documents | PDF, DOCX, TXT, MD, HTML | ✅ Phase 1 |
-| Structured data | JSON, CSV, TSV, XLSX | ✅ Phase 1 |
-| Audio | MP3, WAV, M4A, FLAC, OGG, WebM | ✅ Phase 2b |
-| Video | MP4, MOV, MKV, AVI, WEBM, OGV | ✅ Phase 2b |
-| Images | JPEG, PNG, WEBP, TIFF, BMP, GIF | ✅ Phase 2b |
-| Office (presentations) | PPTX | 🗓 Phase 3+ |
-| Email | .eml, .msg | 🗓 Phase 3+ |
-| Archives | .zip, .tar | 🗓 Phase 3+ |
+## Prerequisites
 
-## Extracted intelligence
+- Docker and Docker Compose
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- Node.js 18+ (only for the optional frontend)
+- NVIDIA Container Toolkit (optional — needed only for GPU-accelerated audio/video/OCR in Docker)
 
-| Signal | Description | Status |
-|---|---|---|
-| Text chunks + embeddings | Structure-first chunking + 768-dim BGE-base-en-v1.5 vectors in pgvector | ✅ Phase 2 |
-| Hybrid search | BM25 + vector + RRF merge over `/v1/search` | ✅ Phase 2 |
-| Structured tables | Rows from CSV, XLSX, PDF tables, JSON arrays | ✅ Phase 1 |
-| Named entities | People, orgs, locations, dates | 🗓 Phase 3 |
-| Document summary | LLM-generated abstractive summary | 🗓 Phase 3 |
-| Sentiment / classification | Per-document and per-section scores | 🗓 Phase 3 |
-| Transcription | Audio/video speech-to-text via faster-whisper (`base` model, GPU/CPU) | ✅ Phase 2b |
-| OCR | Image text extraction via EasyOCR (English) | ✅ Phase 2b |
-| EXIF / codec metadata | File-level technical metadata | ✅ Phase 1 |
+## Quickstart
 
-## Implementation roadmap
-
-- [x] **Phase 0 — Skeleton**: FastAPI gateway, ARQ worker, PostgreSQL schema with pgvector, MinIO object store, Docker Compose, Alembic migrations, eval harness skeleton
-- [x] **Phase 1 — Text & structured formats**: PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers · structure-first chunker · document upload API · full pipeline loop (upload → extract → chunk → index)
-- [x] **Phase 2 — Embeddings + hybrid search**: local BGE-base-en-v1.5 (768-dim) via sentence-transformers · pgvector HNSW index · `POST /v1/search` with BM25, vector, and RRF hybrid modes · Redis cache for query embeddings · 126 unit tests · 6 E2E tests · 5/5 eval fixtures · `ruff` clean — *shipped, architect audit closed 2026-05-07 (see [`docs/phase2-audit.md`](docs/phase2-audit.md))*
-- [x] **Phase 2b — Heavy formats**: GPU worker queue (`arq:gpu`, cost-class routing) · faster-whisper (audio: MP3/WAV/M4A/FLAC/OGG/WebM) · ffmpeg + faster-whisper video pipeline · EasyOCR (images: JPEG/PNG/WEBP/TIFF/BMP/GIF) · embedding bakeoff with pooled-corpus methodology (BGE-base vs BGE-M3 vs nomic-embed) — *shipped, BGE-M3 +18.7% recall@1; switching gated on larger corpus + DB migration. Architect audit closed 2026-05-07 (see [`docs/phase2b-audit.md`](docs/phase2b-audit.md))*
-- [x] **Phase 2c — Robustness & multilingual**: `IngestContext.stream_blob()` async generator (audio/video stream to temp file, no RAM cap) · multilingual OCR with LRU-bounded reader cache + EasyOCR language allowlist + per-request `ocr_languages` override · expanded eval corpus (53 chunks / 39 queries / 7 fixtures) · pooled-corpus bakeoff verdict: **bge-base ≈ bge-m3, not statistically significant — no migration** · upload-side backpressure (HTTP 429 when CPU queue ≥ MAX_QUEUE_DEPTH) · idempotency guard (skip already-terminal documents) · DLQ retry payload stored in `doc.error.retry_payload` · pre-existing CPU queue-name mismatch fixed (worker now reads from same key the API enqueues to). Architect audit closed 2026-05-08.
-- [ ] **Phase 3 — Enrichment**: LLM summarization · NER (spaCy + LLM-assisted) · routing policy engine (jsonlogic) · RAGChecker / ARES eval metrics wired in
-- [ ] **Phase 4 — Multi-tenant + auth**: API keys · JWT (RS256) · rate limiting · row-level security · per-tenant routing policies
-- [ ] **Phase 5 — Observability**: OpenTelemetry traces · Prometheus metrics · Grafana dashboards · Loki structured logs · Sentry exceptions
-- [ ] **Phase 6 — Hardening**: Chaos tests · DB partitioning (chunks by tenant) · cost dashboards · compliance groundwork
-
-## Architecture
-
-See [`docs/architecture.md`](docs/architecture.md) for full system design: pipeline stages, handler registry, queue topology, storage schema, API surface, scalability considerations, and open decisions.
-
-## Getting started
-
-**Requirements**: Docker, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Node.js 20+ (only if you want the frontend)
-
-### What runs where
-
-| Component | Port | Started by |
-|---|---|---|
-| Postgres (pgvector) | 5432 | `docker compose up -d postgres redis minio` |
-| Redis | 6379 | (same) |
-| MinIO (S3) | 9000 / 9001 | (same) |
-| FastAPI | 8000 | `uv run uvicorn omnivore.api.main:app --reload` |
-| ARQ CPU worker | — | `uv run python -m omnivore.worker.main` |
-| ARQ GPU worker (optional) | — | `uv run python -m omnivore.worker.gpu_main` |
-| Next.js frontend (optional) | 3000 | `cd frontend && npm run dev` |
-
-You need at minimum: Postgres, Redis, MinIO, the API, and the CPU worker. The GPU worker is only needed for audio/video/image OCR. The frontend is optional — you can drive the whole system with `curl`.
-
-### 1. Backend + DB + worker
+### 1. Clone and copy env
 
 ```bash
-git clone https://github.com/hazarsozer/project-omnivore
-cd project-omnivore
-
-uv sync
+git clone https://github.com/<your-org>/omnivore
+cd omnivore
 cp .env.example .env
+```
 
+### 2. Generate the JWT keypair
+
+The RS256 keypair is required for API key auth. Generate it once and paste the PEM content into `.env`.
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
+openssl rsa -pubout -in private.pem -out public.pem
+```
+
+Then open `.env` and:
+- Set `JWT_PRIVATE_KEY_PEM` to the full content of `private.pem` (the `-----BEGIN PRIVATE KEY-----` block). Multi-line PEM is fine — pydantic-settings reads it correctly.
+- Set `JWT_PUBLIC_KEY_PEM` to the full content of `public.pem`.
+- Set `ADMIN_BOOTSTRAP_TOKEN` to a strong random string:
+  ```bash
+  openssl rand -hex 32
+  ```
+
+> Keep `private.pem` off disk once you've pasted it into `.env`. The `.env` file itself must never be committed — it is already in `.gitignore`.
+
+### 3. Start infrastructure
+
+```bash
 docker compose up -d postgres redis minio
+uv sync
 uv run alembic upgrade head
+```
 
+### 4. Start API and worker
+
+```bash
 # Terminal 1 — API (with live reload)
 uv run uvicorn omnivore.api.main:app --reload
 
-# Terminal 2 — CPU worker (first start downloads BGE-base ~440 MB)
+# Terminal 2 — CPU worker (first start downloads BGE-base, ~440 MB)
 uv run python -m omnivore.worker.main
 
 # Terminal 3 (optional) — GPU worker, for audio/video/image OCR
 uv run python -m omnivore.worker.gpu_main
 ```
 
-### 2. Frontend (optional)
+### 5. Bootstrap your first tenant and API key
 
-A Next.js admin UI for upload, search, and document inspection lives in [`frontend/`](frontend/).
+The admin endpoints are protected by `ADMIN_BOOTSTRAP_TOKEN`. Use them once to create a tenant and mint an API key, then use that key for all subsequent requests.
 
 ```bash
-# Terminal 4
-cd frontend
-npm install
-cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
-npm run dev                  # http://localhost:3000
+# Create a tenant — the response includes an initial API key
+curl -X POST http://localhost:8000/v1/admin/tenants \
+  -H "X-Admin-Token: $ADMIN_BOOTSTRAP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"slug": "default", "display_name": "Default"}'
+# Response includes: tenant_id, api_key (shown once — save it)
+
+# Or create an additional API key for an existing tenant
+curl -X POST http://localhost:8000/v1/admin/tenants/<tenant_id>/api-keys \
+  -H "X-Admin-Token: $ADMIN_BOOTSTRAP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-key", "scopes": ["documents:read","documents:write","search:read","entities:read","handlers:read"]}'
 ```
 
-Pages: `/documents` (drag-drop upload + list + detail), `/search` (BM25/vector/hybrid), `/admin` (handlers + readiness checks). See [`frontend/README.md`](frontend/README.md) for details.
+### 6. Upload a document
 
-### 3. Drive it from the terminal
-
-**Upload a file:**
 ```bash
 curl -X POST http://localhost:8000/v1/documents \
-     -F "file=@your-document.pdf"
-# → {"success": true, "data": {"document_id": "...", "status": "queued", "poll_url": "/v1/documents/..."}}
+  -H "X-API-Key: $YOUR_API_KEY" \
+  -F "file=@path/to/your.pdf"
+# → {"success": true, "data": {"document_id": "...", "status": "queued", "poll_url": "..."}}
 
-curl http://localhost:8000/v1/documents/{document_id}
-# → {"success": true, "data": {"status": "indexed", "chunks": 42, ...}}
+# Poll for completion
+curl http://localhost:8000/v1/documents/<document_id> \
+  -H "X-API-Key: $YOUR_API_KEY"
+# → {"success": true, "data": {"status": "indexed", ...}}
 ```
 
-**Search (Phase 2):**
+### 7. Search
+
 ```bash
 curl -X POST http://localhost:8000/v1/search \
-     -H "Content-Type: application/json" \
-     -d '{"query": "document ingestion pipeline", "mode": "hybrid", "top_k": 5}'
-# → {"success": true, "data": [{"chunk_id": "...", "content": "...", "score": 0.0312, ...}, ...]}
+  -H "X-API-Key: $YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "your question", "mode": "hybrid", "top_k": 5}'
 ```
 
-**Explore the API:** `http://localhost:8000/docs`
+### 8. Admin frontend (optional)
+
+```bash
+cd frontend
+npm install
+npm run dev   # http://localhost:3000
+```
+
+The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). Pages: `/documents` (upload, list, detail with summary/entities/routing/retry), `/search` (BM25/vector/hybrid toggle), `/admin` (handlers + readiness).
+
+### 9. Monitoring stack (optional)
+
+The observability stack (Tempo, Prometheus, Loki, Grafana) is opt-in via a Docker Compose profile.
+
+```bash
+# Generate a metrics auth token before starting
+openssl rand -hex 32 > observability/auth_token
+echo "METRICS_AUTH_TOKEN=$(cat observability/auth_token)" >> .env
+
+docker compose --profile monitoring up -d
+# Grafana: http://localhost:3000 (anonymous Admin access, no login required)
+# Prometheus: http://localhost:9090
+# Tempo: http://localhost:3200
+```
+
+Three dashboards are auto-provisioned in Grafana: Pipeline Overview, Search Latency, and Tenant Activity.
+
+## Service layout
+
+| Component | Port | How to start |
+|---|---|---|
+| PostgreSQL (pgvector) | 5432 | `docker compose up -d postgres` |
+| Redis | 6379 | `docker compose up -d redis` |
+| MinIO (S3-compatible) | 9000 / 9001 console | `docker compose up -d minio` |
+| FastAPI | 8000 | `uv run uvicorn omnivore.api.main:app --reload` |
+| ARQ CPU worker | — | `uv run python -m omnivore.worker.main` |
+| ARQ GPU worker | — | `uv run python -m omnivore.worker.gpu_main` |
+| Next.js frontend | 3000 | `cd frontend && npm run dev` |
+| Grafana | 3000 (monitoring profile) | `docker compose --profile monitoring up -d` |
+| Prometheus | 9090 | (same) |
+| Tempo | 4318 / 3200 | (same) |
+
+Minimum required: Postgres, Redis, MinIO, the API, and the CPU worker. The GPU worker is needed only for audio/video/image OCR jobs.
+
+## API reference
+
+All responses use the `APIResponse[T]` envelope:
+```json
+{ "success": true, "data": <T>, "error": null, "meta": null }
+```
+Errors: `success: false`, `error: { code, message }`.
+
+Document status values: `queued | routing | extracting | enriching | indexed | failed | duplicate`
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/v1/health` | none | Liveness check |
+| GET | `/v1/ready` | none | Readiness — checks Postgres, Redis, MinIO |
+| GET | `/v1/handlers` | API key | List registered format handlers |
+| POST | `/v1/documents` | API key | Upload a file — returns 202, 413, or 429 |
+| GET | `/v1/documents` | API key | List documents (`?status=&limit=&cursor=`) |
+| GET | `/v1/documents/{id}` | API key | Get document detail including summary and routing decision |
+| GET | `/v1/documents/{id}/entities` | API key | Named entities extracted from the document |
+| POST | `/v1/documents/{id}/retry` | API key | Re-queue a failed document |
+| POST | `/v1/search` | API key | BM25 / vector / hybrid search |
+| POST | `/v1/auth/token` | API key in body | Exchange an API key for a short-lived RS256 JWT |
+| GET | `/v1/tenant` | JWT | Get current tenant info |
+| GET | `/v1/tenant/config` | JWT | Get tenant routing config |
+| PUT | `/v1/tenant/config` | JWT | Update tenant routing config |
+| GET | `/v1/tenant/api-keys` | JWT | List own API keys |
+| POST | `/v1/tenant/api-keys` | JWT | Create an additional API key |
+| DELETE | `/v1/tenant/api-keys/{id}` | JWT | Revoke an API key |
+| POST | `/v1/admin/tenants` | Admin token | Create a tenant (also mints an initial API key) |
+| GET | `/v1/admin/tenants` | Admin token | List all tenants |
+| PATCH | `/v1/admin/tenants/{id}` | Admin token | Update tenant metadata or config |
+| POST | `/v1/admin/tenants/{id}/api-keys` | Admin token | Mint an API key for a tenant |
+| DELETE | `/v1/admin/api-keys/{id}` | Admin token | Revoke any API key |
+
+Full OpenAPI schema (with request/response shapes): `http://localhost:8000/docs`
+
+## Configuration reference
+
+All settings are read from `.env` via pydantic-settings. See `src/omnivore/config.py` for the full list.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://omnivore:omnivore@localhost:5432/omnivore` | PostgreSQL connection string |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
+| `MINIO_ENDPOINT` | `localhost:9000` | MinIO / S3 endpoint (no scheme) |
+| `MINIO_ACCESS_KEY` | `omnivore` | MinIO access key |
+| `MINIO_SECRET_KEY` | `omnivore123` | MinIO secret key |
+| `MINIO_BUCKET` | `omnivore-raw` | Bucket for raw file blobs |
+| `MINIO_SECURE` | `false` | Use TLS for MinIO connection |
+| `JWT_PRIVATE_KEY_PEM` | _(empty)_ | RSA private key PEM — required for auth |
+| `JWT_PUBLIC_KEY_PEM` | _(empty)_ | RSA public key PEM — required for auth |
+| `JWT_ALGORITHM` | `RS256` | JWT signing algorithm |
+| `JWT_ACCESS_TOKEN_EXPIRE_SECONDS` | `3600` | JWT TTL in seconds |
+| `ADMIN_BOOTSTRAP_TOKEN` | `change-me-admin-token` | Root admin token — change before first run |
+| `RL_CAPACITY` | `100` | Rate limiter: max burst tokens per tenant |
+| `RL_REFILL_RATE` | `10.0` | Rate limiter: tokens per second refill rate |
+| `RL_UPLOAD_COST` | `10` | Tokens consumed per document upload |
+| `RL_DEFAULT_COST` | `1` | Tokens consumed per other request |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Enable Claude Haiku document summaries |
+| `MAX_UPLOAD_SIZE_BYTES` | `2147483648` | Upload size limit (2 GB default) |
+| `MAX_QUEUE_DEPTH` | `100` | CPU queue depth before HTTP 429 |
+| `MAX_GPU_QUEUE_DEPTH` | `20` | GPU queue depth before HTTP 429 |
+| `IMAGE_OCR_LANGUAGES` | `["en"]` | Default EasyOCR language list |
+| `OTEL_ENABLED` | `true` | Enable OpenTelemetry tracing |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | OTLP collector endpoint |
+| `OTEL_SERVICE_NAME` | `omnivore` | Service name in traces |
+| `METRICS_ENABLED` | `true` | Enable Prometheus metrics endpoint |
+| `METRICS_AUTH_TOKEN` | _(empty)_ | Bearer token protecting `/metrics`; leave empty to disable auth |
+| `LOG_LEVEL` | `INFO` | structlog log level |
+| `ENVIRONMENT` | `development` | Environment name (`development` / `production`) |
+
+## Development
+
+```bash
+# Install dependencies
+uv sync
+
+# Start required infrastructure
+docker compose up -d postgres redis minio
+uv run alembic upgrade head
+
+# Run the full test suite (needs infra running)
+ADMIN_BOOTSTRAP_TOKEN=test-admin-bootstrap-for-integration-only uv run pytest tests/ -q
+
+# Lint
+uv run ruff check src/ tests/
+
+# Run the eval harness (run this before shipping any handler change)
+uv run python -m eval.harness --fixture-ids pdf-001 pdf-003
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
+
+## Roadmap
+
+- [x] **Phase 0 — Skeleton**: FastAPI, ARQ, PostgreSQL + pgvector schema, MinIO, Alembic, eval harness
+- [x] **Phase 1 — Text and structured formats**: PDF, DOCX, TXT, MD, HTML, JSON, CSV, XLSX handlers; structure-first chunker; document upload API
+- [x] **Phase 2 — Embeddings and hybrid search**: BGE-base-en-v1.5 (768-dim, local); pgvector HNSW index; `POST /v1/search` with BM25, vector, and hybrid (RRF) modes
+- [x] **Phase 2b — Heavy formats**: GPU worker queue; faster-whisper audio/video transcription; EasyOCR image OCR
+- [x] **Phase 2c — Robustness**: `stream_blob()` for large files; multilingual OCR with LRU reader cache; backpressure (HTTP 429); idempotency guard; DLQ retry payload; transactional outbox
+- [x] **Phase 3 — Enrichment**: Language detection (lingua); NER (spaCy); LLM summaries (Claude Haiku, optional); routing policy engine; `chunk_faithfulness` eval metric
+- [x] **Phase 4 — Multi-tenant auth**: API keys (Argon2id); RS256 JWT exchange; fine-grained scopes; Lua token-bucket rate limiting; row-level security on all tables; admin and tenant self-service endpoints
+- [x] **Phase 5 — Observability**: OTel traces → Tempo; Prometheus metrics; structlog JSON → Promtail → Loki; Grafana dashboards; W3C traceparent propagation across API → worker boundary
+- [x] **Phase 6 — Hardening**: Chaos tests; DB partitioning groundwork; cost dashboards; GUC pool-leak fix
+
+**What's next**: PPTX/email/archive format handlers; RAPTOR/GraphRAG retrieval for multi-hop queries; billing and quota tiers; Docling PDF backend (gated on eval win > 10%).
+
+## Architecture
+
+See [`docs/architecture.md`](docs/architecture.md) for the full system design: pipeline stages, handler registry, queue topology, storage schema, and open architectural decisions.
 
 ## Contributing
 
-See [`CLAUDE.md`](CLAUDE.md) for architecture decisions, coding conventions, and what's in scope for each phase. If you're using Claude Code, it will load this automatically.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -12,7 +12,6 @@ from arq.connections import RedisSettings
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -82,10 +81,6 @@ async def lifespan(app: FastAPI):
     # Observability — set up before anything else so early logs get trace_id
     setup_tracing(settings)
 
-    # M-3: pre-initialise QUEUE_DEPTH time series so Grafana never shows "no data"
-    QUEUE_DEPTH.labels(queue="default").set(0)
-    QUEUE_DEPTH.labels(queue="gpu").set(0)
-
     registry.discover()
     logger.info("startup", environment=settings.ENVIRONMENT, handlers=len(registry.all_handlers()))
 
@@ -104,10 +99,6 @@ async def lifespan(app: FastAPI):
     poller_task.cancel()
     await _auth_redis.aclose()
     await app.state.arq_pool.close()
-    # M-5: flush pending spans before the process exits
-    provider = trace.get_tracer_provider()
-    if hasattr(provider, "shutdown"):
-        provider.shutdown()
     logger.info("shutdown")
 
 
@@ -119,17 +110,18 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(_PrometheusMiddleware)
 
-# OTel FastAPI auto-instrumentation — adds http.server spans for every request.
-# M-6: only instrument when OTEL_ENABLED=True to avoid silent error swallowing.
-if get_settings().OTEL_ENABLED:
+# OTel FastAPI auto-instrumentation — adds http.server spans for every request
+try:
     FastAPIInstrumentor.instrument_app(app)
+except Exception:
+    pass
 
 # Prometheus /metrics endpoint — explicit route avoids Starlette's mount trailing-slash redirect
 @app.get("/metrics", include_in_schema=False)
