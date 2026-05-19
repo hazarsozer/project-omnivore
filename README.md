@@ -64,7 +64,23 @@ See [`docs/architecture.md`](docs/architecture.md) for full system design: pipel
 
 ## Getting started
 
-**Requirements**: Docker, Python 3.12+, `uv`
+**Requirements**: Docker, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), Node.js 20+ (only if you want the frontend)
+
+### What runs where
+
+| Component | Port | Started by |
+|---|---|---|
+| Postgres (pgvector) | 5432 | `docker compose up -d postgres redis minio` |
+| Redis | 6379 | (same) |
+| MinIO (S3) | 9000 / 9001 | (same) |
+| FastAPI | 8000 | `uv run uvicorn omnivore.api.main:app --reload` |
+| ARQ CPU worker | — | `uv run python -m omnivore.worker.main` |
+| ARQ GPU worker (optional) | — | `uv run python -m omnivore.worker.gpu_main` |
+| Next.js frontend (optional) | 3000 | `cd frontend && npm run dev` |
+
+You need at minimum: Postgres, Redis, MinIO, the API, and the CPU worker. The GPU worker is only needed for audio/video/image OCR. The frontend is optional — you can drive the whole system with `curl`.
+
+### 1. Backend + DB + worker
 
 ```bash
 git clone https://github.com/hazarsozer/project-omnivore
@@ -76,12 +92,31 @@ cp .env.example .env
 docker compose up -d postgres redis minio
 uv run alembic upgrade head
 
-# API (with live reload)
+# Terminal 1 — API (with live reload)
 uv run uvicorn omnivore.api.main:app --reload
 
-# Worker (separate terminal — first start downloads BGE-base ~440 MB)
+# Terminal 2 — CPU worker (first start downloads BGE-base ~440 MB)
 uv run python -m omnivore.worker.main
+
+# Terminal 3 (optional) — GPU worker, for audio/video/image OCR
+uv run python -m omnivore.worker.gpu_main
 ```
+
+### 2. Frontend (optional)
+
+A Next.js admin UI for upload, search, and document inspection lives in [`frontend/`](frontend/).
+
+```bash
+# Terminal 4
+cd frontend
+npm install
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:8000
+npm run dev                  # http://localhost:3000
+```
+
+Pages: `/documents` (drag-drop upload + list + detail), `/search` (BM25/vector/hybrid), `/admin` (handlers + readiness checks). See [`frontend/README.md`](frontend/README.md) for details.
+
+### 3. Drive it from the terminal
 
 **Upload a file:**
 ```bash

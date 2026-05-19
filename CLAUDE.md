@@ -207,3 +207,74 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 4 — Multi-tenant | API keys (Argon2id), RS256 JWT exchange, fine-grained scopes, Lua token-bucket rate limiter, FORCE ROW LEVEL SECURITY on 6 tables, admin/tenant self-service endpoints. M-1/M-2/M-3 closed (routing enforcement, tenant policy fetch, matched-rule audit). | **Done — 2026-05-14.** 329 tests passing, ruff clean. Opus audit (`docs/phase4-audit.md`) closed: C-1 (`admin_session` now commits on clean exit), C-2 (version-counter cache invalidation), H-1 (RLS GUC set/reset in `get_db_for_tenant`), H-2 (`rate_limited` dependency on all routes), H-3 (Redis singleton in lifespan), H-4 (`VerificationError` catch in `verify_key`), H-5 (`UpdateTenantRequest` Pydantic model with policy validation), M-2 (positive admin provisioning integration test). |
 | 5 — Observability | OTel traces (spans in API + worker → Tempo via OTLP), prometheus-client metrics (`/metrics` scrape → Prometheus), structlog JSON → Promtail → Loki, Grafana dashboards (Pipeline Overview / Search / Tenants) auto-provisioned. W3C traceparent propagation across API→ARQ boundary. `docker compose --profile monitoring up -d`. Tempo v3 config fix (compactor stanza removed). | **Done — 2026-05-18.** 346 tests passing, ruff clean. NEW-H-1 GUC pool-leak fix (Opus re-audit) included. |
 | 6 — Hardening | Chaos tests, DB partitioning, cost dashboards | Ongoing |
+
+---
+
+## Quick reference — live API surface
+
+All responses are wrapped in `APIResponse[T]`:
+```json
+{ "success": true, "data": <T>, "error": null, "meta": null }
+```
+Errors return `success: false`, `error: { code, message }`. Document status enum: `queued | routing | extracting | enriching | indexed | failed | duplicate`.
+
+| Method | Path | Body / Query | Returns (data) |
+|---|---|---|---|
+| GET | `/v1/health` | — | `{ status, service }` |
+| GET | `/v1/ready` | — | `{ postgres, redis, minio }` (503 if any not ok) |
+| GET | `/v1/handlers` | — | `[{ name, version, accepts, cost_class, … }]` |
+| POST | `/v1/documents` | multipart `file` | `{ document_id, status, poll_url }` — 202; 413 if > `MAX_UPLOAD_SIZE_BYTES`; 429 if queue full |
+| GET | `/v1/documents` | `?status=&limit=&cursor=` | `[{ document_id, filename, mime_type, status, created_at }]` |
+| GET | `/v1/documents/{id}` | — | `{ document_id, filename, mime_type, size_bytes, status, handler, created_at, indexed_at, error, metadata, summary, routing_decision }` |
+| GET | `/v1/documents/{id}/entities` | — | `[{ label, value, normalized, confidence }]` |
+| POST | `/v1/documents/{id}/retry` | — | 202 — only when current status is `failed` AND `error.retry_payload` exists; else 409 / 404 / 422 |
+| POST | `/v1/search` | `{ query, mode: "bm25"\|"vector"\|"hybrid", top_k }` | `[{ chunk_id, document_id, content, heading_path, score, token_count }]` |
+
+CORS is wide-open (`allow_origins=["*"]`) in [`src/omnivore/api/main.py`](src/omnivore/api/main.py) — local dev frontends can hit the API directly without a proxy.
+
+Tenant is hardcoded to `DEFAULT_TENANT_ID` ([`src/omnivore/constants.py`](src/omnivore/constants.py)) until Phase 4.
+
+## Quick reference — DB tables (`core.*`)
+
+| Table | Key columns | Purpose |
+|---|---|---|
+| `tenants` | `id`, `slug`, `config` | Tenant (only `DEFAULT_TENANT_ID` is seeded today) |
+| `documents` | `id`, `tenant_id`, `sha256`, `status`, `error`, `metadata`, `routing_decision`, `indexed_at` | One row per upload; unique on `(tenant_id, sha256)` |
+| `chunks` | `id`, `document_id`, `ordinal`, `content`, `content_tsv` (GENERATED), `embedding vector(768)`, `heading_path`, `language` | Indexed for BM25 (`content_tsv`) and HNSW (`embedding`) |
+| `entities` | `document_id`, `label`, `value`, `normalized` | Unique on `(document_id, label, normalized)` |
+| `extracted_tables` / `extracted_rows` | `document_id`, `data` (JSONB) | Tables from CSV/XLSX/PDF; `data` has GIN `jsonb_path_ops` index |
+| `jobs` | `document_id`, `stage`, `status`, `attempts` | Durable audit log (Redis is ephemeral) |
+| `outbox` | `aggregate_id`, `event_type`, `payload`, `published_at` | Transactional enqueue safety net; cron `outbox_relay` drains it every 30s |
+
+## Quick reference — where things live
+
+```
+src/omnivore/
+  api/main.py                  FastAPI app, lifespan, ARQ pool, CORS, global exception handler
+  api/routes/documents.py      Upload, list, get, entities, retry
+  api/routes/search.py         BM25 / vector / hybrid (RRF k=60, pre_k = top_k×4)
+  api/routes/health.py         /health, /ready
+  api/routes/handlers_route.py /handlers (admin)
+  api/schemas.py               APIResponse[T] envelope
+  constants.py                 DEFAULT_TENANT_ID, GPU_QUEUE_NAME ("arq:gpu")
+  config.py                    Settings (pydantic-settings, lru_cached)
+  db/models.py                 All SQLAlchemy 2.0 Mapped models (core schema)
+  db/session.py                AsyncSessionLocal, get_db
+  pipeline/registry.py         FormatHandler protocol + entry-point discovery
+  pipeline/chunker.py          Structure-first chunker (512 tok, 64 overlap)
+  pipeline/embeddings.py       BGE-base-en-v1.5 (768-dim); Redis cache for query embeddings
+  pipeline/routing.py          evaluate_policy() — advisory in v1 (M-1 deferred to Phase 4)
+  pipeline/enrichers/          language (lingua), ner (spaCy), summarizer (Claude Haiku)
+  pipeline/handlers/           One file per format; pdf, docx, text (txt+md), html, json, csv, xlsx, audio, video, image
+  worker/main.py               CPU WorkerSettings (queue "arq:queue")
+  worker/gpu_main.py           GPU WorkerSettings (queue "arq:gpu", max_jobs=2)
+  worker/tasks.py              ingest_dispatch, gpu_ingest_dispatch, outbox_relay, on_startup (warms models)
+alembic/versions/               0001_initial → 0004_add_routing_status
+frontend/                       Next.js 15 admin UI — see frontend/README.md
+```
+
+## Frontend (Next.js 15, App Router)
+
+Lives in [`frontend/`](frontend/). Reads `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`). Pages: `/documents` (upload + list + detail with summary/entities/routing/retry), `/search` (mode toggle: BM25/vector/hybrid), `/admin` (handlers + readiness). Stack: TypeScript, Tailwind, shadcn/ui, lucide-react.
+
+Run: `cd frontend && npm install && npm run dev` (port 3000). API must be running on 8000.
