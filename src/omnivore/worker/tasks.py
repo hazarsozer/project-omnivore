@@ -318,8 +318,7 @@ async def _run_ingest(
 
         # LLM summarization — non-fatal
         with _get_tracer("omnivore.worker").start_as_current_span("omnivore.ingest.enrich.summarize"):
-            api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
-            summary = await summarize_document(chunks, api_key=api_key, filename=doc.filename)
+            summary = await summarize_document(chunks, settings=settings, filename=doc.filename)
 
         # Routing summary for document-level audit
         routing_decision = _compute_routing_decision(chunks, chunk_sinks, tenant_policy)

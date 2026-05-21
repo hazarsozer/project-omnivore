@@ -238,14 +238,10 @@ def test_video_handler_accepts_common_video_mimes():
 # Vision enrichment — frame extraction and captions (Phase 7)
 # ---------------------------------------------------------------------------
 
-def _mock_settings_video(*, api_key: str | None = None, interval: int = 30, max_frames: int = 20):
+def _mock_settings_video(*, llm_on: bool = True, interval: int = 30, max_frames: int = 20):
     s = MagicMock()
-    if api_key:
-        secret = MagicMock()
-        secret.get_secret_value.return_value = api_key
-        s.ANTHROPIC_API_KEY = secret
-    else:
-        s.ANTHROPIC_API_KEY = None
+    s.LLM_PROVIDER = "anthropic"
+    s.LLM_VISION_MODEL = ""
     s.VIDEO_FRAME_SAMPLE_INTERVAL = interval
     s.VIDEO_MAX_VISION_FRAMES = max_frames
     return s
@@ -267,34 +263,27 @@ def _stub_frame_dir(monkeypatch_or_patch, frame_count: int = 2) -> dict[str, byt
     return _fake_extract_frames, frame_contents
 
 
-async def test_vision_captions_added_when_api_key_present():
-    """With API key, frame extraction + vision produces vision_caption fragments."""
+async def test_vision_captions_added_when_llm_configured():
+    """With LLM configured, frame extraction + vision produces vision_caption fragments."""
     segs = [_make_segment(" Narrator speaks.", 0.0, 5.0)]
     model = _stub_model(segs, _make_info())
     fake_extract_frames, _ = _stub_frame_dir(None, frame_count=2)
 
+    call_count = 0
+
+    async def _fake_describe(img_bytes, *, settings, mime_type="image/jpeg"):
+        nonlocal call_count
+        call_count += 1
+        return f"Scene {call_count}: a presenter speaking."
 
     with (
         patch.object(VideoHandler, "_get_model", return_value=model),
         patch("omnivore.pipeline.handlers.video._extract_audio"),
         patch("omnivore.pipeline.handlers.video._extract_frames", side_effect=fake_extract_frames),
-        patch("omnivore.pipeline.handlers.video.get_settings",
-              return_value=_mock_settings_video(api_key="sk-test")),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+        patch("omnivore.pipeline.handlers.video.get_settings", return_value=_mock_settings_video()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch("omnivore.pipeline.enrichers.vision.describe_image", side_effect=_fake_describe),
     ):
-        from anthropic.types import TextBlock
-        call_count = 0
-
-        async def _vision_response(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            tb = MagicMock(spec=TextBlock)
-            tb.text = f"Scene {call_count}: a presenter speaking."
-            resp = MagicMock()
-            resp.content = [tb]
-            return resp
-
-        mock_anthropic.return_value.messages.create = _vision_response
         result = await VideoHandler().extract(_make_blob(), _make_ctx())
 
     vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
@@ -302,16 +291,16 @@ async def test_vision_captions_added_when_api_key_present():
     assert result.metadata["vision_frames_captioned"] == 2
 
 
-async def test_no_vision_captions_without_api_key():
-    """Without ANTHROPIC_API_KEY, no frame extraction or vision calls happen."""
+async def test_no_vision_captions_when_llm_not_configured():
+    """When llm_configured() is False, no frame extraction or vision calls happen."""
     segs = [_make_segment(" Hello.", 0.0, 1.0)]
     model = _stub_model(segs, _make_info())
 
     with (
         patch.object(VideoHandler, "_get_model", return_value=model),
         patch("omnivore.pipeline.handlers.video._extract_audio"),
-        patch("omnivore.pipeline.handlers.video.get_settings",
-              return_value=_mock_settings_video(api_key=None)),
+        patch("omnivore.pipeline.handlers.video.get_settings", return_value=_mock_settings_video()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=False),
         patch("omnivore.pipeline.handlers.video._extract_frames") as mock_frames,
     ):
         result = await VideoHandler().extract(_make_blob(), _make_ctx())
@@ -329,24 +318,18 @@ async def test_fragments_sorted_by_timestamp():
     model = _stub_model(segs, _make_info(duration=90.0))
     fake_extract_frames, _ = _stub_frame_dir(None, frame_count=3)  # frames at 0s, 30s, 60s
 
+    async def _fake_describe(img_bytes, *, settings, mime_type="image/jpeg"):
+        return "A scene."
+
     with (
         patch.object(VideoHandler, "_get_model", return_value=model),
         patch("omnivore.pipeline.handlers.video._extract_audio"),
         patch("omnivore.pipeline.handlers.video._extract_frames", side_effect=fake_extract_frames),
         patch("omnivore.pipeline.handlers.video.get_settings",
-              return_value=_mock_settings_video(api_key="sk-test", interval=30)),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+              return_value=_mock_settings_video(interval=30)),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch("omnivore.pipeline.enrichers.vision.describe_image", side_effect=_fake_describe),
     ):
-        from anthropic.types import TextBlock
-
-        async def _vision_response(*args, **kwargs):
-            tb = MagicMock(spec=TextBlock)
-            tb.text = "A scene."
-            resp = MagicMock()
-            resp.content = [tb]
-            return resp
-
-        mock_anthropic.return_value.messages.create = _vision_response
         result = await VideoHandler().extract(_make_blob(), _make_ctx())
 
     start_times = [f.position.start_ms for f in result.fragments
@@ -364,8 +347,8 @@ async def test_vision_frame_failure_does_not_fail_document():
         patch("omnivore.pipeline.handlers.video._extract_audio"),
         patch("omnivore.pipeline.handlers.video._extract_frames",
               side_effect=RuntimeError("ffmpeg not found")),
-        patch("omnivore.pipeline.handlers.video.get_settings",
-              return_value=_mock_settings_video(api_key="sk-test")),
+        patch("omnivore.pipeline.handlers.video.get_settings", return_value=_mock_settings_video()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
     ):
         result = await VideoHandler().extract(_make_blob(), _make_ctx())
 

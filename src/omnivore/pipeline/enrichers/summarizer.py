@@ -5,16 +5,16 @@ import textwrap
 from typing import TYPE_CHECKING
 
 import structlog
-from anthropic import AsyncAnthropic
-from anthropic.types import TextBlock
+
+from omnivore.pipeline.enrichers.llm_client import complete_text
 
 if TYPE_CHECKING:
+    from omnivore.config import Settings
     from omnivore.pipeline.models import Chunk
 
 logger = structlog.get_logger(__name__)
 
-_SUMMARY_MODEL = "claude-haiku-4-5-20251001"
-_MAX_INPUT_TOKENS = 3_000  # ~12 000 chars of chunk content sent to the model
+_MAX_INPUT_CHARS = 12_000  # ~3 000 tokens of chunk content sent to the model
 _SUMMARY_PROMPT = textwrap.dedent("""\
     You are a document analyst. Given the text excerpts below, produce a concise summary.
     Reply ONLY with a JSON object matching this schema (no markdown, no explanation):
@@ -53,33 +53,25 @@ class DocumentSummary:
 async def summarize_document(
     chunks: list[Chunk],
     *,
-    api_key: str | None,
+    settings: Settings,
     filename: str = "",
 ) -> DocumentSummary | None:
-    """Call Claude Haiku to summarize document content. Returns None if api_key is absent."""
-    if not api_key:
-        logger.debug("summarizer.skipped", reason="no_api_key", filename=filename)
-        return None
+    """Summarize document content via the configured LLM provider.
 
+    Returns None when no provider is configured or content is empty.
+    """
     content = _build_content(chunks)
     if not content:
         return None
 
-    client = AsyncAnthropic(api_key=api_key)
     prompt = _SUMMARY_PROMPT.format(content=content)
+    raw = await complete_text(prompt, settings=settings)
+    if not raw:
+        logger.debug("summarizer.skipped", reason="no_response", filename=filename)
+        return None
 
     try:
-        message = await client.messages.create(
-            model=_SUMMARY_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text_blocks = [b for b in message.content if isinstance(b, TextBlock)]
-        if not text_blocks:
-            logger.warning("summarizer.no_text_block", filename=filename)
-            return None
-        raw = text_blocks[0].text.strip()
-        data = json.loads(raw)
+        data = json.loads(_strip_fences(raw))
         return DocumentSummary(
             title=str(data.get("title", "")),
             abstract=str(data.get("abstract", "")),
@@ -87,12 +79,11 @@ async def summarize_document(
             topics=[str(t) for t in data.get("topics", [])],
         )
     except Exception:
-        logger.warning("summarizer.failed", filename=filename, exc_info=True)
+        logger.warning("summarizer.parse_failed", filename=filename, exc_info=True)
         return None
 
 
-def _build_content(chunks: list[Chunk], max_chars: int = _MAX_INPUT_TOKENS * 4) -> str:
-    """Concatenate chunk content up to max_chars."""
+def _build_content(chunks: list[Chunk], max_chars: int = _MAX_INPUT_CHARS) -> str:
     parts: list[str] = []
     total = 0
     for chunk in chunks:
@@ -103,3 +94,14 @@ def _build_content(chunks: list[Chunk], max_chars: int = _MAX_INPUT_TOKENS * 4) 
         parts.append(text[:remaining])
         total += len(text)
     return "\n\n".join(parts)
+
+
+def _strip_fences(text: str) -> str:
+    """Strip markdown code fences that some models wrap JSON output in."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        # drop opening fence (```json or ```) and closing fence (```)
+        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+        return "\n".join(inner)
+    return stripped

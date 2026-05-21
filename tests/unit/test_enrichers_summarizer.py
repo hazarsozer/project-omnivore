@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-from anthropic.types import TextBlock
-
-from omnivore.pipeline.enrichers.summarizer import DocumentSummary, _build_content, summarize_document
+from omnivore.pipeline.enrichers.summarizer import (
+    DocumentSummary,
+    _build_content,
+    _strip_fences,
+    summarize_document,
+)
 from omnivore.pipeline.models import Chunk
 
 
@@ -24,6 +26,18 @@ def _make_chunk(content: str, kind: str = "text", ordinal: int = 0) -> Chunk:
     )
 
 
+def _settings(provider: str = "anthropic") -> MagicMock:
+    s = MagicMock()
+    s.LLM_PROVIDER = provider
+    s.LLM_TEXT_MODEL = ""
+    return s
+
+
+# ---------------------------------------------------------------------------
+# DocumentSummary
+# ---------------------------------------------------------------------------
+
+
 class TestDocumentSummary:
     def test_to_dict(self):
         s = DocumentSummary(
@@ -37,6 +51,11 @@ class TestDocumentSummary:
         assert d["abstract"] == "A test document."
         assert d["key_points"] == ["point 1"]
         assert d["topics"] == ["testing"]
+
+
+# ---------------------------------------------------------------------------
+# _build_content
+# ---------------------------------------------------------------------------
 
 
 class TestBuildContent:
@@ -60,35 +79,53 @@ class TestBuildContent:
         assert "second" in result
 
 
+# ---------------------------------------------------------------------------
+# _strip_fences
+# ---------------------------------------------------------------------------
+
+
+class TestStripFences:
+    def test_plain_json_unchanged(self):
+        raw = '{"title": "T"}'
+        assert _strip_fences(raw) == raw
+
+    def test_strips_json_fence(self):
+        raw = '```json\n{"title": "T"}\n```'
+        assert _strip_fences(raw) == '{"title": "T"}'
+
+    def test_strips_plain_fence(self):
+        raw = '```\n{"title": "T"}\n```'
+        assert _strip_fences(raw) == '{"title": "T"}'
+
+    def test_strips_whitespace(self):
+        raw = '  {"title": "T"}  '
+        assert _strip_fences(raw) == '{"title": "T"}'
+
+
+# ---------------------------------------------------------------------------
+# summarize_document
+# ---------------------------------------------------------------------------
+
+_VALID_JSON = (
+    '{"title": "PostgreSQL Overview", "abstract": "A database system.",'
+    ' "key_points": ["open source"], "topics": ["databases"]}'
+)
+
+
 class TestSummarizeDocument:
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_api_key(self):
-        chunks = [_make_chunk("Some content")]
-        result = await summarize_document(chunks, api_key=None)
-        assert result is None
-
-    @pytest.mark.asyncio
     async def test_returns_none_for_empty_chunks(self):
-        # Even with key, empty content → None
-        result = await summarize_document([], api_key="fake-key")
+        result = await summarize_document([], settings=_settings())
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_successful_call(self):
         chunks = [_make_chunk("PostgreSQL is a powerful open source database.")]
-        fake_response_json = (
-            '{"title": "PostgreSQL Overview", "abstract": "A database system.",'
-            ' "key_points": ["open source"], "topics": ["databases"]}'
-        )
 
-        mock_message = MagicMock()
-        mock_message.content = [TextBlock(type="text", text=fake_response_json)]
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_message)
-
-        with patch("omnivore.pipeline.enrichers.summarizer.AsyncAnthropic", return_value=mock_client):
-            result = await summarize_document(chunks, api_key="test-key", filename="test.txt")
+        with patch(
+            "omnivore.pipeline.enrichers.summarizer.complete_text",
+            new_callable=AsyncMock,
+            return_value=_VALID_JSON,
+        ):
+            result = await summarize_document(chunks, settings=_settings(), filename="test.txt")
 
         assert result is not None
         assert result.title == "PostgreSQL Overview"
@@ -96,69 +133,56 @@ class TestSummarizeDocument:
         assert "open source" in result.key_points
         assert "databases" in result.topics
 
-    @pytest.mark.asyncio
-    async def test_returns_none_on_api_error(self):
-        chunks = [_make_chunk("Some content")]
+    async def test_strips_markdown_fences_from_response(self):
+        """Models like Gemini/Ollama sometimes wrap JSON in ```json fences."""
+        chunks = [_make_chunk("Content.")]
+        fenced = f"```json\n{_VALID_JSON}\n```"
 
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(side_effect=Exception("API error"))
-
-        with patch("omnivore.pipeline.enrichers.summarizer.AsyncAnthropic", return_value=mock_client):
-            result = await summarize_document(chunks, api_key="test-key")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_text_block(self):
-        """H-1 regression: if content[0] is ThinkingBlock/ToolUseBlock, return None safely."""
-        chunks = [_make_chunk("Some content")]
-
-        # Plain MagicMock is not a TextBlock instance — simulates ThinkingBlock
-        non_text_block = MagicMock()
-        mock_message = MagicMock()
-        mock_message.content = [non_text_block]
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_message)
-
-        with patch("omnivore.pipeline.enrichers.summarizer.AsyncAnthropic", return_value=mock_client):
-            result = await summarize_document(chunks, api_key="test-key")
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_uses_first_text_block_when_thinking_comes_first(self):
-        """TextBlock filter skips non-text blocks and uses the first text block."""
-        chunks = [_make_chunk("Some content")]
-
-        non_text_block = MagicMock()  # not a TextBlock — simulates ThinkingBlock
-        real_text_block = TextBlock(
-            type="text",
-            text='{"title": "T", "abstract": "A.", "key_points": ["k"], "topics": ["t"]}',
-        )
-        mock_message = MagicMock()
-        mock_message.content = [non_text_block, real_text_block]
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_message)
-
-        with patch("omnivore.pipeline.enrichers.summarizer.AsyncAnthropic", return_value=mock_client):
-            result = await summarize_document(chunks, api_key="test-key")
+        with patch(
+            "omnivore.pipeline.enrichers.summarizer.complete_text",
+            new_callable=AsyncMock,
+            return_value=fenced,
+        ):
+            result = await summarize_document(chunks, settings=_settings())
 
         assert result is not None
-        assert result.title == "T"
+        assert result.title == "PostgreSQL Overview"
 
-    @pytest.mark.asyncio
+    async def test_returns_none_when_complete_text_returns_none(self):
+        chunks = [_make_chunk("Some content")]
+
+        with patch(
+            "omnivore.pipeline.enrichers.summarizer.complete_text",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await summarize_document(chunks, settings=_settings())
+
+        assert result is None
+
     async def test_returns_none_on_invalid_json(self):
         chunks = [_make_chunk("Some content")]
 
-        mock_message = MagicMock()
-        mock_message.content = [TextBlock(type="text", text="not valid json {")]
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(return_value=mock_message)
-
-        with patch("omnivore.pipeline.enrichers.summarizer.AsyncAnthropic", return_value=mock_client):
-            result = await summarize_document(chunks, api_key="test-key")
+        with patch(
+            "omnivore.pipeline.enrichers.summarizer.complete_text",
+            new_callable=AsyncMock,
+            return_value="not valid json {",
+        ):
+            result = await summarize_document(chunks, settings=_settings())
 
         assert result is None
+
+    async def test_passes_settings_to_complete_text(self):
+        chunks = [_make_chunk("Content.")]
+        captured: list[MagicMock] = []
+
+        async def _capture(prompt, *, settings):
+            captured.append(settings)
+            return _VALID_JSON
+
+        with patch("omnivore.pipeline.enrichers.summarizer.complete_text", side_effect=_capture):
+            s = _settings(provider="ollama")
+            await summarize_document(chunks, settings=s)
+
+        assert len(captured) == 1
+        assert captured[0] is s

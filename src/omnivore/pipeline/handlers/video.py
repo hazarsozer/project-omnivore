@@ -118,15 +118,15 @@ class VideoHandler:
                     )
                 )
 
-            # Vision enrichment: sample frames and describe each one via Claude.
+            # Vision enrichment: sample frames and describe each one via the LLM provider.
             # Acts as an enhancer alongside the transcript and as the only content
             # source for silent videos or visual-only content (slides, demos).
-            api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
-            if api_key:
+            from omnivore.pipeline.enrichers.llm_client import llm_configured
+            if llm_configured(settings):
                 await self._add_vision_captions(
                     vid_path=vid_path,
                     loop=loop,
-                    api_key=api_key,
+                    settings=settings,
                     result=result,
                     ctx=ctx,
                     interval=settings.VIDEO_FRAME_SAMPLE_INTERVAL,
@@ -163,7 +163,7 @@ class VideoHandler:
         *,
         vid_path: str,
         loop: asyncio.AbstractEventLoop,
-        api_key: str,
+        settings,
         result: ExtractionResult,
         ctx: IngestContext,
         interval: int,
@@ -196,7 +196,7 @@ class VideoHandler:
                     frame_bytes = fh.read()
                 try:
                     caption = await describe_image(
-                        frame_bytes, api_key=api_key, mime_type="image/jpeg"
+                        frame_bytes, settings=settings, mime_type="image/jpeg"
                     )
                     if caption:
                         result.fragments.append(

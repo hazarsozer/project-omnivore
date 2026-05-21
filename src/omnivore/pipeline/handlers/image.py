@@ -124,12 +124,12 @@ class ImageOcrHandler:
                 )
             )
 
-        # Vision enrichment — always runs when ANTHROPIC_API_KEY is set.
+        # Vision enrichment — runs when an LLM provider is configured.
         # Gives a semantic description useful for non-text images (photos, diagrams)
         # and adds context even for text-bearing images (screenshots, scanned docs).
-        api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
-        if api_key:
-            await self._add_vision_caption(data, blob.mime_type, api_key, result, ctx)
+        from omnivore.pipeline.enrichers.llm_client import llm_configured
+        if llm_configured(settings):
+            await self._add_vision_caption(data, blob.mime_type, settings, result, ctx)
 
         logger.info(
             "image_ocr.extracted",
@@ -143,14 +143,14 @@ class ImageOcrHandler:
         self,
         data: bytes,
         mime_type: str,
-        api_key: str,
+        settings,
         result: ExtractionResult,
         ctx: IngestContext,
     ) -> None:
         from omnivore.pipeline.enrichers.vision import describe_image
 
         try:
-            caption = await describe_image(data, api_key=api_key, mime_type=mime_type)
+            caption = await describe_image(data, settings=settings, mime_type=mime_type)
             if caption:
                 result.fragments.append(
                     Fragment(

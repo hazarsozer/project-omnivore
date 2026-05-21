@@ -241,54 +241,49 @@ def test_image_ocr_handler_name():
 
 
 # ---------------------------------------------------------------------------
-# Vision enrichment (Phase 7)
+# Vision enrichment
 # ---------------------------------------------------------------------------
 
-def _mock_settings(*, api_key: str | None = None, ocr_languages: list[str] | None = None):
-    """Return a MagicMock that looks like Settings with the given values."""
+def _mock_settings(*, llm_on: bool = True, ocr_languages: list[str] | None = None):
+    """Return a MagicMock that looks like Settings."""
     s = MagicMock()
     s.IMAGE_OCR_LANGUAGES = ocr_languages or ["en"]
-    if api_key:
-        secret = MagicMock()
-        secret.get_secret_value.return_value = api_key
-        s.ANTHROPIC_API_KEY = secret
-    else:
-        s.ANTHROPIC_API_KEY = None
+    s.LLM_PROVIDER = "anthropic"
+    s.LLM_VISION_MODEL = ""
     return s
 
 
-async def test_vision_caption_added_when_api_key_present():
-    """When ANTHROPIC_API_KEY is set, a vision_caption fragment is appended."""
+async def test_vision_caption_added_when_llm_configured():
+    """When llm_configured() is True, a vision_caption fragment is appended."""
     reader = MagicMock()
     reader.readtext = MagicMock(return_value=[_easyocr_result("Some text")])
 
     with (
         patch.object(ImageOcrHandler, "_get_reader", return_value=reader),
-        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings(api_key="sk-test")),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch(
+            "omnivore.pipeline.enrichers.vision.describe_image",
+            new_callable=AsyncMock,
+            return_value="A white background with the words Some text.",
+        ),
     ):
-        from anthropic.types import TextBlock
-        tb = MagicMock(spec=TextBlock)
-        tb.text = "A white background with the words Some text."
-        resp = MagicMock()
-        resp.content = [tb]
-        mock_anthropic.return_value.messages.create = AsyncMock(return_value=resp)
-
         result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
 
     vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
     assert len(vision_frags) == 1
-    assert "Some text" in vision_frags[0].content or len(vision_frags[0].content) > 0
+    assert len(vision_frags[0].content) > 0
 
 
-async def test_no_vision_caption_without_api_key():
-    """Without ANTHROPIC_API_KEY, no vision_caption fragment is produced."""
+async def test_no_vision_caption_when_llm_not_configured():
+    """When llm_configured() is False, no vision_caption fragment is produced."""
     reader = MagicMock()
     reader.readtext = MagicMock(return_value=[_easyocr_result("Text")])
 
     with (
         patch.object(ImageOcrHandler, "_get_reader", return_value=reader),
-        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings(api_key=None)),
+        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=False),
     ):
         result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
 
@@ -296,49 +291,45 @@ async def test_no_vision_caption_without_api_key():
 
 
 async def test_vision_caption_on_non_text_image():
-    """A photo with no OCR text still gets a vision_caption when API key is present."""
+    """A photo with no OCR text still gets a vision_caption when LLM is configured."""
     reader = MagicMock()
-    reader.readtext = MagicMock(return_value=[])  # no OCR results
+    reader.readtext = MagicMock(return_value=[])
 
     with (
         patch.object(ImageOcrHandler, "_get_reader", return_value=reader),
-        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings(api_key="sk-test")),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch(
+            "omnivore.pipeline.enrichers.vision.describe_image",
+            new_callable=AsyncMock,
+            return_value="A golden retriever playing in a park.",
+        ),
     ):
-        from anthropic.types import TextBlock
-        tb = MagicMock(spec=TextBlock)
-        tb.text = "A golden retriever playing in a park."
-        resp = MagicMock()
-        resp.content = [tb]
-        mock_anthropic.return_value.messages.create = AsyncMock(return_value=resp)
-
         result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
 
-    ocr_frags = [f for f in result.fragments if f.kind == "ocr"]
-    vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
-    assert ocr_frags == []
-    assert len(vision_frags) == 1
+    assert [f for f in result.fragments if f.kind == "ocr"] == []
+    assert len([f for f in result.fragments if f.kind == "vision_caption"]) == 1
     assert result.metadata.get("vision_enriched") is True
 
 
 async def test_vision_caption_failure_does_not_fail_document():
-    """If the vision API call raises, the document still gets OCR results."""
+    """If describe_image raises, OCR results are still returned."""
     reader = MagicMock()
     reader.readtext = MagicMock(return_value=[_easyocr_result("Safe text")])
 
     with (
         patch.object(ImageOcrHandler, "_get_reader", return_value=reader),
-        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings(api_key="sk-test")),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch(
+            "omnivore.pipeline.enrichers.vision.describe_image",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("LLM unavailable"),
+        ),
     ):
-        mock_anthropic.return_value.messages.create = AsyncMock(
-            side_effect=RuntimeError("API unavailable")
-        )
         result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
 
-    # OCR fragment still there
     assert len([f for f in result.fragments if f.kind == "ocr"]) == 1
-    # No vision fragment
     assert all(f.kind != "vision_caption" for f in result.fragments)
     assert result.metadata.get("vision_enriched", False) is False
 
@@ -349,16 +340,14 @@ async def test_vision_enriched_metadata_flag():
 
     with (
         patch.object(ImageOcrHandler, "_get_reader", return_value=reader),
-        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings(api_key="sk-test")),
-        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+        patch("omnivore.pipeline.handlers.image.get_settings", return_value=_mock_settings()),
+        patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
+        patch(
+            "omnivore.pipeline.enrichers.vision.describe_image",
+            new_callable=AsyncMock,
+            return_value="A sunset over the ocean.",
+        ),
     ):
-        from anthropic.types import TextBlock
-        tb = MagicMock(spec=TextBlock)
-        tb.text = "A sunset over the ocean."
-        resp = MagicMock()
-        resp.content = [tb]
-        mock_anthropic.return_value.messages.create = AsyncMock(return_value=resp)
-
         result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
 
     assert result.metadata["vision_enriched"] is True

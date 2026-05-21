@@ -1,22 +1,24 @@
-"""Vision enricher — describes image content via Claude Haiku vision API.
+"""Vision enricher — describes image content via the configured LLM provider.
 
-Requires ANTHROPIC_API_KEY. Called from image and video handlers where raw bytes
-are available. Non-fatal: callers catch exceptions and log warnings.
+Delegates to llm_client.complete_vision() so the provider (Anthropic, OpenAI,
+Google, Ollama) is chosen by settings.LLM_PROVIDER. TIFF/BMP images are converted
+to JPEG before being sent because not all providers accept those formats natively.
 """
 from __future__ import annotations
 
-import base64
 import io
+from typing import TYPE_CHECKING
 
 import structlog
-from anthropic import AsyncAnthropic
-from anthropic.types import TextBlock
+
+from omnivore.pipeline.enrichers.llm_client import complete_vision
+
+if TYPE_CHECKING:
+    from omnivore.config import Settings
 
 logger = structlog.get_logger(__name__)
 
-_VISION_MODEL = "claude-haiku-4-5-20251001"
-
-# Formats Claude vision does not accept natively — converted to JPEG before sending.
+# Formats not accepted by all vision providers — convert to JPEG before sending.
 _NEEDS_CONVERSION: frozenset[str] = frozenset({"image/tiff", "image/bmp"})
 
 _PROMPT = """\
@@ -36,44 +38,19 @@ would match this description if appropriate.
 async def describe_image(
     image_bytes: bytes,
     *,
-    api_key: str,
+    settings: Settings,
     mime_type: str = "image/jpeg",
 ) -> str:
-    """Call Claude Haiku vision to describe the image. Returns the caption string."""
+    """Return a natural-language description of the image via the configured LLM."""
     if mime_type in _NEEDS_CONVERSION:
         image_bytes, mime_type = _to_jpeg(image_bytes)
 
-    b64 = base64.standard_b64encode(image_bytes).decode()
-    client = AsyncAnthropic(api_key=api_key)
-    message = await client.messages.create(
-        model=_VISION_MODEL,
-        max_tokens=512,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": b64,
-                        },
-                    },
-                    {"type": "text", "text": _PROMPT},
-                ],
-            }
-        ],
-    )
-    text_blocks = [b for b in message.content if isinstance(b, TextBlock)]
-    if not text_blocks:
-        logger.warning("vision.no_text_block")
-        return ""
-    return text_blocks[0].text.strip()
+    caption = await complete_vision(image_bytes, mime_type, _PROMPT, settings=settings)
+    return caption or ""
 
 
 def _to_jpeg(image_bytes: bytes) -> tuple[bytes, str]:
-    """Convert TIFF/BMP to JPEG so Claude vision API accepts it."""
+    """Convert TIFF/BMP to JPEG so all vision providers can accept it."""
     from PIL import Image
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")

@@ -19,6 +19,19 @@ class Settings(BaseSettings):
     SECRET_KEY: SecretStr = SecretStr("change-me-in-production")
     OPENAI_API_KEY: SecretStr | None = None
     ANTHROPIC_API_KEY: SecretStr | None = None
+    GOOGLE_API_KEY: SecretStr | None = None
+
+    # LLM enrichment provider — controls summarization and vision captioning.
+    # Options: "anthropic" | "openai" | "google" | "ollama"
+    # Defaults per provider:
+    #   anthropic  text=claude-haiku-4-5-20251001  vision=claude-haiku-4-5-20251001
+    #   openai     text=gpt-4o-mini               vision=gpt-4o-mini
+    #   google     text=gemini-2.0-flash           vision=gemini-2.0-flash
+    #   ollama     text=qwen2.5:7b                 vision=qwen2.5-vl:7b
+    LLM_PROVIDER: str = "anthropic"
+    LLM_TEXT_MODEL: str = ""   # empty = use provider default
+    LLM_VISION_MODEL: str = "" # empty = use provider default
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # Phase 4 — Auth
     # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0
