@@ -57,6 +57,24 @@ class RateLimitResult:
         self.reset_after_seconds = int((cost - remaining) / refill_rate) + 1 if not allowed else 0
 
 
+async def check_auth_rate_limit(client_ip: str) -> RateLimitResult:
+    """IP-based token-bucket for the pre-auth POST /auth/token endpoint."""
+    settings = get_settings()
+    bucket_key = f"rl:auth_ip:{client_ip}"
+    now_ms = int(time.time() * 1000)
+
+    r = _get_redis()
+    script = r.register_script(_LUA_SCRIPT)
+    result = await script(
+        keys=[bucket_key],
+        args=[settings.RL_AUTH_CAPACITY, settings.RL_AUTH_REFILL_RATE, 1, now_ms],
+    )
+
+    allowed = bool(result[0])
+    remaining = result[1] / 100.0
+    return RateLimitResult(allowed, remaining, settings.RL_AUTH_CAPACITY, 1, settings.RL_AUTH_REFILL_RATE)
+
+
 async def check_rate_limit(
     tenant_id: uuid.UUID,
     *,

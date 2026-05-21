@@ -43,6 +43,51 @@ _VISION_DEFAULTS: dict[str, str] = {
 }
 _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
+# ---------------------------------------------------------------------------
+# Module-level singletons — constructed once per process, reusing TCP pools
+# ---------------------------------------------------------------------------
+
+_anthropic_singleton: AsyncAnthropic | None = None
+_openai_singletons: dict[str, AsyncOpenAI] = {}
+
+
+def _get_anthropic(settings: Settings) -> AsyncAnthropic:
+    global _anthropic_singleton
+    if _anthropic_singleton is None:
+        if not settings.ANTHROPIC_API_KEY:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        _anthropic_singleton = AsyncAnthropic(
+            api_key=settings.ANTHROPIC_API_KEY.get_secret_value(),
+            timeout=120.0,
+        )
+    return _anthropic_singleton
+
+
+def _get_openai_client(settings: Settings) -> AsyncOpenAI:
+    p = settings.LLM_PROVIDER
+    if p not in _openai_singletons:
+        _openai_singletons[p] = _build_openai_client(settings)
+    return _openai_singletons[p]
+
+
+def _build_openai_client(settings: Settings) -> AsyncOpenAI:
+    p = settings.LLM_PROVIDER
+    if p == "openai":
+        if not settings.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY not set")
+        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value(), timeout=120.0)
+    if p == "google":
+        if not settings.GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY not set")
+        return AsyncOpenAI(
+            api_key=settings.GOOGLE_API_KEY.get_secret_value(),
+            base_url=_GOOGLE_BASE_URL,
+            timeout=120.0,
+        )
+    if p == "ollama":
+        return AsyncOpenAI(api_key="ollama", base_url=f"{settings.OLLAMA_BASE_URL}/v1", timeout=120.0)
+    raise ValueError(f"Unknown LLM provider: {p!r}")
+
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -99,9 +144,7 @@ async def complete_vision(
 # ---------------------------------------------------------------------------
 
 async def _anthropic_text(prompt: str, *, model: str, settings: Settings) -> str:
-    if not settings.ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY not set")
-    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+    client = _get_anthropic(settings)
     msg = await client.messages.create(
         model=model,
         max_tokens=512,
@@ -119,10 +162,8 @@ async def _anthropic_vision(
     model: str,
     settings: Settings,
 ) -> str:
-    if not settings.ANTHROPIC_API_KEY:
-        raise ValueError("ANTHROPIC_API_KEY not set")
     b64 = base64.standard_b64encode(image_bytes).decode()
-    client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY.get_secret_value())
+    client = _get_anthropic(settings)
     msg = await client.messages.create(
         model=model,
         max_tokens=512,
@@ -145,26 +186,8 @@ async def _anthropic_vision(
 # OpenAI-compatible backend  (openai · google · ollama)
 # ---------------------------------------------------------------------------
 
-def _openai_client(settings: Settings):
-    p = settings.LLM_PROVIDER
-    if p == "openai":
-        if not settings.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY not set")
-        return AsyncOpenAI(api_key=settings.OPENAI_API_KEY.get_secret_value())
-    if p == "google":
-        if not settings.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY not set")
-        return AsyncOpenAI(
-            api_key=settings.GOOGLE_API_KEY.get_secret_value(),
-            base_url=_GOOGLE_BASE_URL,
-        )
-    if p == "ollama":
-        return AsyncOpenAI(api_key="ollama", base_url=f"{settings.OLLAMA_BASE_URL}/v1")
-    raise ValueError(f"Unknown LLM provider: {p!r}")
-
-
 async def _openai_compat_text(prompt: str, *, model: str, settings: Settings) -> str:
-    client = _openai_client(settings)
+    client = _get_openai_client(settings)
     resp = await client.chat.completions.create(
         model=model,
         max_tokens=512,
@@ -182,7 +205,7 @@ async def _openai_compat_vision(
     settings: Settings,
 ) -> str:
     b64 = base64.standard_b64encode(image_bytes).decode()
-    client = _openai_client(settings)
+    client = _get_openai_client(settings)
     resp = await client.chat.completions.create(
         model=model,
         max_tokens=512,

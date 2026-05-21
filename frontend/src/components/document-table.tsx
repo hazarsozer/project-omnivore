@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import {
   Table,
@@ -47,17 +47,26 @@ export function DocumentTable({
   const [loaded, setLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const load = useCallback(async (statusFilter: string) => {
     try {
       const data = await api.listDocuments(
         statusFilter === "all" ? {} : { status: statusFilter }
       );
+      if (!mountedRef.current) return;
       setItems(data);
       setError(null);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof APIError ? e.detail || e.message : String(e));
     } finally {
+      if (!mountedRef.current) return;
       setLoaded(true);
       setRefreshing(false);
     }

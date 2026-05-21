@@ -1,7 +1,7 @@
-"""PDF handler — PyMuPDF (AGPL-3.0) + pdfplumber (MIT).
+"""PDF handler — pypdf (MIT) + pdfplumber (MIT).
 
-NOTE: PyMuPDF is AGPL-3.0. Confirm distribution model before shipping to customers (architecture Q4).
-Fallback to pypdf + pdfminer.six (BSD/MIT) if on-prem distribution requires it.
+Both dependencies are MIT-licensed, resolving the previous AGPL-3.0 PyMuPDF
+incompatibility with the project's MIT LICENSE (architecture Q4).
 """
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ logger = structlog.get_logger(__name__)
 
 class PdfHandler:
     name: ClassVar[str] = "pdf"
-    version: ClassVar[str] = "1.0.0"
+    version: ClassVar[str] = "1.1.0"
     accepts: ClassVar[tuple[str, ...]] = ("application/pdf",)
     cost_class: ClassVar[str] = "cpu"
     timeout_seconds: ClassVar[int] = 300
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
-        import fitz  # PyMuPDF
         import pdfplumber
+        import pypdf
 
         data = await ctx.read_blob()
         result = ExtractionResult(
@@ -34,59 +34,54 @@ class PdfHandler:
             handler_version=self.version,
         )
 
-        doc = fitz.open(stream=data, filetype="pdf")
+        # Metadata via pypdf (MIT)
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        info = reader.metadata
         result.metadata = {
-            "page_count": len(doc),
-            "title": doc.metadata.get("title", ""),
-            "author": doc.metadata.get("author", ""),
+            "page_count": len(reader.pages),
+            "title": (info.title if info else "") or "",
+            "author": (info.author if info else "") or "",
             "format": "pdf",
         }
 
-        avg_font = _avg_font_size(doc)
-        reading_order = 0
-        heading_stack: list[tuple[int, str]] = []
+        # Text + heading extraction via pdfplumber (MIT)
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            avg_font = _avg_font_size(pdf)
+            reading_order = 0
+            heading_stack: list[tuple[int, str]] = []
 
-        for page_num, page in enumerate(doc):
-            page_dict = page.get_text("dict")
-            for raw_block in page_dict.get("blocks", []):
-                if raw_block.get("type") != 0:
-                    continue
-                bbox = raw_block.get("bbox")
-                for line in raw_block.get("lines", []):
-                    line_text = " ".join(
-                        span.get("text", "") for span in line.get("spans", [])
-                    ).strip()
-                    if not line_text:
-                        continue
-                    span0 = line["spans"][0] if line["spans"] else {}
-                    font_size = span0.get("size", 12)
-                    is_bold = "Bold" in span0.get("font", "")
+            for page_num, page in enumerate(pdf.pages):
+                for line in _page_lines(page):
+                    text = line["text"]
+                    size = line["size"]
+                    is_bold = line["is_bold"]
+                    bbox = line["bbox"]
 
-                    if font_size > avg_font * 1.2 or (is_bold and font_size >= avg_font):
-                        level = _size_to_level(font_size, avg_font)
+                    if size > avg_font * 1.2 or (is_bold and size >= avg_font):
+                        level = _size_to_level(size, avg_font)
                         heading_stack = [(lvl, t) for lvl, t in heading_stack if lvl < level]
-                        heading_stack.append((level, line_text))
+                        heading_stack.append((level, text))
                         blk = Block(
                             kind="heading",
                             level=level,
                             reading_order=reading_order,
                             page=page_num + 1,
-                            bbox=tuple(bbox) if bbox else None,
-                            text=line_text,
+                            bbox=bbox,
+                            text=text,
                         )
                     else:
                         blk = Block(
                             kind="paragraph",
                             reading_order=reading_order,
                             page=page_num + 1,
-                            bbox=tuple(bbox) if bbox else None,
-                            text=line_text,
+                            bbox=bbox,
+                            text=text,
                         )
                         result.fragments.append(
                             Fragment(
                                 kind="text",
-                                content=line_text,
-                                position=PagePosition(page=page_num + 1, bbox=tuple(bbox) if bbox else None),
+                                content=text,
+                                position=PagePosition(page=page_num + 1, bbox=bbox),
                                 source_block_ids=[blk.block_id],
                                 heading_path=[t for _, t in heading_stack],
                             )
@@ -94,9 +89,7 @@ class PdfHandler:
                     result.blocks.append(blk)
                     reading_order += 1
 
-        # Tables via pdfplumber
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            for page_num, page in enumerate(pdf.pages):
+                # Tables (pdfplumber, same as before)
                 for t_idx, table in enumerate(page.extract_tables() or []):
                     if not table or not table[0]:
                         continue
@@ -115,7 +108,6 @@ class PdfHandler:
                         )
                     )
 
-        doc.close()
         logger.info(
             "pdf.extracted",
             document_id=str(ctx.document_id),
@@ -126,16 +118,59 @@ class PdfHandler:
         return result
 
 
-def _avg_font_size(doc) -> float:
+def _avg_font_size(pdf) -> float:
     sizes: list[float] = []
-    for page in doc[: min(3, len(doc))]:
-        for blk in page.get_text("dict").get("blocks", []):
-            if blk.get("type") != 0:
-                continue
-            for line in blk.get("lines", []):
-                for span in line.get("spans", []):
-                    sizes.append(span.get("size", 12))
+    for page in pdf.pages[:3]:
+        for char in page.chars:
+            size = char.get("size")
+            if size:
+                sizes.append(size)
     return sum(sizes) / len(sizes) if sizes else 12.0
+
+
+def _page_lines(page) -> list[dict]:
+    """Group chars by approximate baseline position into text lines."""
+    chars = sorted(page.chars, key=lambda c: (round(c.get("top", 0.0) / 4) * 4, c.get("x0", 0.0)))
+    lines: list[dict] = []
+    current: list[dict] = []
+    current_bucket: float | None = None
+
+    for char in chars:
+        bucket = round(char.get("top", 0.0) / 4) * 4
+        if current_bucket is None or bucket != current_bucket:
+            if current:
+                line = _chars_to_line(current)
+                if line["text"].strip():
+                    lines.append(line)
+            current = [char]
+            current_bucket = bucket
+        else:
+            current.append(char)
+
+    if current:
+        line = _chars_to_line(current)
+        if line["text"].strip():
+            lines.append(line)
+
+    return lines
+
+
+def _chars_to_line(chars: list[dict]) -> dict:
+    text = "".join(c.get("text", "") for c in chars)
+    sizes = [c["size"] for c in chars if c.get("size")]
+    fontnames = [c.get("fontname", "") for c in chars]
+    bbox: tuple[float, ...] | None = (
+        min(c.get("x0", 0.0) for c in chars),
+        min(c.get("top", 0.0) for c in chars),
+        max(c.get("x1", 0.0) for c in chars),
+        max(c.get("bottom", 0.0) for c in chars),
+    ) if chars else None
+    return {
+        "text": text,
+        "size": sum(sizes) / len(sizes) if sizes else 12.0,
+        "is_bold": any("Bold" in fn or "bold" in fn for fn in fontnames),
+        "bbox": bbox,
+    }
 
 
 def _size_to_level(size: float, avg: float) -> int:

@@ -1,6 +1,6 @@
-"""Unit tests for PdfHandler — uses fitz (PyMuPDF) to build in-memory PDFs.
+"""Unit tests for PdfHandler — uses reportlab (BSD) to build in-memory PDFs.
 
-No disk I/O, no MinIO. fitz is already a project dependency for the handler itself.
+No disk I/O, no MinIO.
 """
 from __future__ import annotations
 
@@ -22,23 +22,22 @@ def _build_pdf(
     heading_fontsize: float = 24.0,
     body_fontsize: float = 12.0,
 ) -> bytes:
-    """Build a minimal single-page PDF in memory via fitz."""
-    import fitz
+    """Build a minimal single-page PDF in memory via reportlab (BSD)."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
 
-    doc = fitz.open()
-    page = doc.new_page(width=612, height=792)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
     y = 720.0
     if heading:
-        page.insert_text(
-            (72, y), heading, fontsize=heading_fontsize, fontname="helv"
-        )
+        c.setFont("Helvetica-Bold", heading_fontsize)
+        c.drawString(72, y, heading)
         y -= heading_fontsize + 8
     for text in (paragraphs or []):
-        page.insert_text((72, y), text, fontsize=body_fontsize, fontname="helv")
+        c.setFont("Helvetica", body_fontsize)
+        c.drawString(72, y, text)
         y -= body_fontsize + 4
-    buf = io.BytesIO()
-    doc.save(buf)
-    doc.close()
+    c.save()
     return buf.getvalue()
 
 

@@ -186,9 +186,8 @@ class VideoHandler:
                 return
 
             frame_files = sorted(f for f in os.listdir(frame_dir) if f.endswith(".jpg"))
-            caption_count = 0
-            for fname in frame_files:
-                # frame_%04d.jpg → 1-indexed; convert to 0-indexed timestamp
+
+            async def _caption_one(fname: str) -> Fragment | None:
                 idx = int(fname.replace("frame_", "").replace(".jpg", "")) - 1
                 ts_s = idx * interval
                 frame_path = os.path.join(frame_dir, fname)
@@ -199,17 +198,14 @@ class VideoHandler:
                         frame_bytes, settings=settings, mime_type="image/jpeg"
                     )
                     if caption:
-                        result.fragments.append(
-                            Fragment(
-                                kind="vision_caption",
-                                content=caption,
-                                position=TimePosition(
-                                    start_ms=ts_s * 1000,
-                                    end_ms=(ts_s + interval) * 1000,
-                                ),
-                            )
+                        return Fragment(
+                            kind="vision_caption",
+                            content=caption,
+                            position=TimePosition(
+                                start_ms=ts_s * 1000,
+                                end_ms=(ts_s + interval) * 1000,
+                            ),
                         )
-                        caption_count += 1
                 except Exception:
                     logger.warning(
                         "video.vision_caption.failed",
@@ -217,7 +213,13 @@ class VideoHandler:
                         timestamp_s=ts_s,
                         exc_info=True,
                     )
-            result.metadata["vision_frames_captioned"] = caption_count
+                return None
+
+            captions = await asyncio.gather(*(_caption_one(f) for f in frame_files))
+            for frag in captions:
+                if frag is not None:
+                    result.fragments.append(frag)
+            result.metadata["vision_frames_captioned"] = sum(1 for f in captions if f is not None)
         finally:
             shutil.rmtree(frame_dir, ignore_errors=True)
 

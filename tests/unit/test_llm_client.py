@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+import omnivore.pipeline.enrichers.llm_client as _llm_mod
 from omnivore.pipeline.enrichers.llm_client import (
     _GOOGLE_BASE_URL,
     _TEXT_DEFAULTS,
@@ -12,6 +15,19 @@ from omnivore.pipeline.enrichers.llm_client import (
     complete_vision,
     llm_configured,
 )
+
+# ---------------------------------------------------------------------------
+# Reset module-level singletons between tests so constructor patches work
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_llm_singletons():
+    _llm_mod._anthropic_singleton = None
+    _llm_mod._openai_singletons.clear()
+    yield
+    _llm_mod._anthropic_singleton = None
+    _llm_mod._openai_singletons.clear()
+
 
 # ---------------------------------------------------------------------------
 # Settings factory

@@ -66,20 +66,19 @@ jobs:
           done
 
       - name: Generate JWT keypair
-        id: gen_jwt
         run: |
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem
           openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem
           {
-            echo 'private_key<<EOF'
+            echo 'JWT_PRIVATE_KEY_PEM<<EOF'
             cat /tmp/private.pem
             echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          } >> "$GITHUB_ENV"
           {
-            echo 'public_key<<EOF'
+            echo 'JWT_PUBLIC_KEY_PEM<<EOF'
             cat /tmp/public.pem
             echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          } >> "$GITHUB_ENV"
 
       - name: Run Alembic migrations
         env:
@@ -93,8 +92,6 @@ jobs:
           ADMIN_BOOTSTRAP_TOKEN: test-admin-bootstrap-for-integration-only
           JWT_ALGORITHM: RS256
           JWT_ACCESS_TOKEN_EXPIRE_SECONDS: "3600"
-          JWT_PRIVATE_KEY_PEM: ${{ steps.gen_jwt.outputs.private_key }}
-          JWT_PUBLIC_KEY_PEM: ${{ steps.gen_jwt.outputs.public_key }}
           ENVIRONMENT: test
           OTEL_ENABLED: "false"
           LOG_LEVEL: WARNING
@@ -115,8 +112,6 @@ jobs:
           ADMIN_BOOTSTRAP_TOKEN: test-admin-bootstrap-for-integration-only
           JWT_ALGORITHM: RS256
           JWT_ACCESS_TOKEN_EXPIRE_SECONDS: "3600"
-          JWT_PRIVATE_KEY_PEM: ${{ steps.gen_jwt.outputs.private_key }}
-          JWT_PUBLIC_KEY_PEM: ${{ steps.gen_jwt.outputs.public_key }}
           ENVIRONMENT: test
           OTEL_ENABLED: "false"
           LOG_LEVEL: WARNING

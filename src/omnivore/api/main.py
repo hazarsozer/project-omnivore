@@ -37,6 +37,20 @@ from omnivore.pipeline.registry import registry
 logger = structlog.get_logger(__name__)
 
 
+class _RequestContextMiddleware(BaseHTTPMiddleware):
+    """Bind a unique request_id to every structlog log line for this request."""
+
+    async def dispatch(self, request: Request, call_next):
+        import structlog.contextvars
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=secrets.token_hex(8),
+            method=request.method,
+            path=request.url.path,
+        )
+        return await call_next(request)
+
+
 class _PrometheusMiddleware(BaseHTTPMiddleware):
     """Record omnivore_http_requests_total and omnivore_http_duration_seconds."""
 
@@ -146,14 +160,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_origins = get_settings().ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_settings().ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(_PrometheusMiddleware)
+app.add_middleware(_RequestContextMiddleware)
 
 # OTel FastAPI auto-instrumentation — adds http.server spans for every request.
 # M-6: only instrument when OTEL_ENABLED=True to avoid silent error swallowing.

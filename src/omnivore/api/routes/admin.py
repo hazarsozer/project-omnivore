@@ -43,13 +43,18 @@ class CreateKeyRequest(BaseModel):
     test: bool = False
 
 
+_VALID_TENANT_STATUSES = frozenset({"active", "suspended"})
+
+
 class UpdateTenantRequest(BaseModel):
     display_name: str | None = None
     status: str | None = None
     config: dict | None = None
 
     @model_validator(mode="after")
-    def _validate_routing_policy(self) -> UpdateTenantRequest:
+    def _validate_fields(self) -> UpdateTenantRequest:
+        if self.status is not None and self.status not in _VALID_TENANT_STATUSES:
+            raise ValueError(f"status must be one of {sorted(_VALID_TENANT_STATUSES)}")
         if self.config and "routing_policy" in self.config:
             from omnivore.pipeline.routing import validate_policy
             errors = validate_policy(self.config["routing_policy"])

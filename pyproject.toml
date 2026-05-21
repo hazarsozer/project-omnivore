@@ -21,7 +21,6 @@ dependencies = [
     "python-multipart",
     "httpx",
     "pgvector",
-    "pymupdf",
     "pdfplumber",
     "python-docx",
     "markdown-it-py",
@@ -43,6 +42,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.62b1",
     "prometheus-client>=0.25.0",
     "openai>=2.37.0",
+    "pypdf>=6.12.0",
 ]
 
 [project.entry-points."omnivore.handlers"]
@@ -67,6 +67,7 @@ dev = [
     "ruff>=0.4",
     "pyright>=1.1",
     "pre-commit>=4.6.0",
+    "reportlab>=4.5.1",
 ]
 
 [build-system]

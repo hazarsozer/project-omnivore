@@ -6,6 +6,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+import aioboto3 as _aioboto3
+
+_S3_SESSION = _aioboto3.Session()
+
 
 @dataclass
 class BlobRef:
@@ -25,12 +29,9 @@ class IngestContext:
     _settings: Any = field(repr=False)  # omnivore.config.Settings; avoid circular import
 
     async def read_blob(self) -> bytes:
-        import aioboto3
-
         s = self._settings
         endpoint = f"{'https' if s.MINIO_SECURE else 'http'}://{s.MINIO_ENDPOINT}"
-        session = aioboto3.Session()
-        async with session.client(
+        async with _S3_SESSION.client(
             "s3",
             endpoint_url=endpoint,
             aws_access_key_id=s.MINIO_ACCESS_KEY,
@@ -42,12 +43,9 @@ class IngestContext:
 
     async def stream_blob(self, chunk_size: int = 65_536) -> AsyncIterator[bytes]:
         """Yield blob bytes from MinIO in chunks without buffering the full file."""
-        import aioboto3
-
         s = self._settings
         endpoint = f"{'https' if s.MINIO_SECURE else 'http'}://{s.MINIO_ENDPOINT}"
-        session = aioboto3.Session()
-        async with session.client(
+        async with _S3_SESSION.client(
             "s3",
             endpoint_url=endpoint,
             aws_access_key_id=s.MINIO_ACCESS_KEY,

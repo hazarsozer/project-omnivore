@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, APIError } from "@/lib/api";
-import { setStoredJWT, setStoredApiKey } from "@/lib/auth";
+import { setStoredJWT } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,7 +32,6 @@ export default function LoginPage() {
     try {
       const data = await api.exchangeToken(apiKey.trim());
       setStoredJWT(data.access_token);
-      setStoredApiKey(apiKey.trim());
       router.replace("/documents");
     } catch (err) {
       const msg =

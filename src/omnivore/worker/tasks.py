@@ -323,6 +323,27 @@ async def _run_ingest(
         # Routing summary for document-level audit
         routing_decision = _compute_routing_decision(chunks, chunk_sinks, tenant_policy)
 
+        # M-1: Embed BEFORE flipping status so a failed embed doesn't leave
+        # the document appearing vector-searchable when it isn't.
+        try:
+            vectors_to_embed = [
+                (i, chunk) for i, (chunk, sinks) in enumerate(zip(chunks, chunk_sinks))
+                if "vector" in sinks
+            ]
+            if vectors_to_embed:
+                idxs, vec_chunks = zip(*vectors_to_embed)
+                vectors = await embed_chunks(list(vec_chunks), redis=ctx.get("redis"))
+                for idx, vector in zip(idxs, vectors):
+                    chunk_rows[idx].embedding = vector
+                    chunk_rows[idx].embedding_model = EMBEDDING_MODEL
+        except Exception:
+            logger.warning(
+                "embeddings.failed_chunks_indexed_without_vectors",
+                document_id=document_id,
+                chunks=len(chunk_rows),
+            )
+
+        # Single commit: embeddings + status flip + metadata atomically
         doc.status = "indexed"
         doc.indexed_at = datetime.now(UTC)
         doc.doc_metadata = {
@@ -341,26 +362,6 @@ async def _run_ingest(
         INGEST_DURATION.labels(handler=handler.name, status="indexed").observe(
             _time.monotonic() - _ingest_start
         )
-
-        # M-1: Only embed chunks that are routed to the vector sink
-        try:
-            vectors_to_embed = [
-                (i, chunk) for i, (chunk, sinks) in enumerate(zip(chunks, chunk_sinks))
-                if "vector" in sinks
-            ]
-            if vectors_to_embed:
-                idxs, vec_chunks = zip(*vectors_to_embed)
-                vectors = await embed_chunks(list(vec_chunks), redis=ctx.get("redis"))
-                for idx, vector in zip(idxs, vectors):
-                    chunk_rows[idx].embedding = vector
-                    chunk_rows[idx].embedding_model = EMBEDDING_MODEL
-                await db.commit()
-        except Exception:
-            logger.warning(
-                "embeddings.failed_chunks_indexed_without_vectors",
-                document_id=document_id,
-                chunks=len(chunk_rows),
-            )
 
     logger.info(
         "ingest.dispatch.complete",

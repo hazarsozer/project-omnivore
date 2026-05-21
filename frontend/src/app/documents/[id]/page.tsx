@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -34,23 +34,33 @@ export default function DocumentDetailPage({
   const [loaded, setLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const d = await api.getDocument(id);
+      if (!mountedRef.current) return;
       setDoc(d);
       setError(null);
       if (d.status === "indexed" || d.status === "failed") {
         try {
           const e = await api.getEntities(id);
+          if (!mountedRef.current) return;
           setEntities(e);
         } catch {
           /* non-fatal */
         }
       }
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof APIError ? e.detail || e.message : String(e));
     } finally {
+      if (!mountedRef.current) return;
       setLoaded(true);
       setRefreshing(false);
     }

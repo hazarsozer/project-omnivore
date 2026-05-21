@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from omnivore.api.schemas import APIResponse
 from omnivore.auth.api_key import extract_prefix, verify_key
 from omnivore.auth.jwt import issue_token
+from omnivore.auth.rate_limit import check_auth_rate_limit
 from omnivore.config import get_settings
 from omnivore.db.models import ApiKey, Tenant
 from omnivore.db.session import admin_session
@@ -21,7 +22,23 @@ class TokenRequest(BaseModel):
     api_key: str
 
 
-@router.post("/token")
+async def _ip_rate_limit(request: Request, response: Response) -> None:
+    """IP-based rate limit for the pre-auth token exchange endpoint."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "unknown"
+    )
+    rl = await check_auth_rate_limit(client_ip)
+    response.headers["X-RateLimit-Remaining"] = str(int(rl.remaining))
+    if not rl.allowed:
+        response.headers["Retry-After"] = str(rl.reset_after_seconds)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many attempts. Retry in {rl.reset_after_seconds}s.",
+        )
+
+
+@router.post("/token", dependencies=[Depends(_ip_rate_limit)])
 async def exchange_token(body: TokenRequest) -> APIResponse[dict]:
     settings = get_settings()
     if not settings.JWT_PRIVATE_KEY_PEM.get_secret_value():

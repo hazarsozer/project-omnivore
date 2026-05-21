@@ -11,7 +11,6 @@ import type {
 } from "./types";
 import {
   clearAuth,
-  getStoredApiKey,
   getStoredJWT,
   setStoredJWT,
 } from "./auth";
@@ -93,17 +92,10 @@ async function fetchToken(apiKey: string): Promise<TokenResponse> {
   return body as TokenResponse;
 }
 
-/** Attempt to refresh JWT using the stored API key. Returns true on success. */
+/** Silent JWT refresh is disabled — raw API key is never persisted in the browser.
+ *  On 401, the user is redirected to the login page to re-enter their API key. */
 async function tryRefreshJWT(): Promise<boolean> {
-  const storedKey = getStoredApiKey();
-  if (!storedKey) return false;
-  try {
-    const data = await fetchToken(storedKey);
-    setStoredJWT(data.access_token);
-    return true;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -165,6 +157,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         env.error?.code
       );
     }
+    if (env.data == null) {
+      throw new APIError(res.status, "Unexpected empty response data");
+    }
     return env.data as T;
   }
   return body as T;
@@ -216,41 +211,45 @@ export const api = {
       };
 
       xhr.onload = async () => {
-        // Handle 401 with refresh on XHR path
-        if (xhr.status === 401) {
-          const refreshed = await tryRefreshJWT();
-          if (refreshed) {
-            // Re-issue request with fresh token
-            api
-              .uploadDocument(file, onProgress)
-              .then(resolve)
-              .catch(reject);
+        try {
+          // Handle 401 with refresh on XHR path
+          if (xhr.status === 401) {
+            const refreshed = await tryRefreshJWT();
+            if (refreshed) {
+              // Re-issue request with fresh token
+              api
+                .uploadDocument(file, onProgress)
+                .then(resolve)
+                .catch(reject);
+              return;
+            }
+            clearAuth();
+            reject(new APIError(401, "Unauthorized — please sign in again"));
             return;
           }
-          clearAuth();
-          reject(new APIError(401, "Unauthorized — please sign in again"));
-          return;
-        }
 
-        let parsed: unknown = null;
-        try {
-          parsed = JSON.parse(xhr.responseText);
-        } catch {
-          /* keep null */
-        }
-        if (xhr.status >= 200 && xhr.status < 300) {
-          const env = parsed as APIResponse<UploadResponse> | null;
-          if (env?.success && env.data) {
-            resolve(env.data);
-          } else {
-            reject(new APIError(xhr.status, env?.error?.message ?? "Upload failed"));
+          let parsed: unknown = null;
+          try {
+            parsed = JSON.parse(xhr.responseText);
+          } catch {
+            /* keep null */
           }
-        } else {
-          const detail =
-            (parsed && typeof parsed === "object" && "detail" in parsed
-              ? String((parsed as { detail: unknown }).detail)
-              : undefined) ?? xhr.statusText;
-          reject(new APIError(xhr.status, `Upload failed: ${detail}`, detail));
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const env = parsed as APIResponse<UploadResponse> | null;
+            if (env?.success && env.data) {
+              resolve(env.data);
+            } else {
+              reject(new APIError(xhr.status, env?.error?.message ?? "Upload failed"));
+            }
+          } else {
+            const detail =
+              (parsed && typeof parsed === "object" && "detail" in parsed
+                ? String((parsed as { detail: unknown }).detail)
+                : undefined) ?? xhr.statusText;
+            reject(new APIError(xhr.status, `Upload failed: ${detail}`, detail));
+          }
+        } catch (err) {
+          reject(err instanceof Error ? err : new APIError(0, String(err)));
         }
       };
       xhr.onerror = () => reject(new APIError(0, "Network error"));

@@ -1,7 +1,13 @@
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_WEAK_DEFAULTS: dict[str, str] = {
+    "SECRET_KEY": "change-me-in-production",
+    "ADMIN_BOOTSTRAP_TOKEN": "change-me-before-first-run",
+    "MINIO_SECRET_KEY": "omnivore123",
+}
 
 
 class Settings(BaseSettings):
@@ -47,6 +53,10 @@ class Settings(BaseSettings):
     RL_UPLOAD_COST: int = 10        # tokens consumed per upload
     RL_DEFAULT_COST: int = 1        # tokens consumed per other request
 
+    # Pre-auth IP-based rate limit for POST /auth/token
+    RL_AUTH_CAPACITY: int = 5       # max burst: 5 attempts
+    RL_AUTH_REFILL_RATE: float = 0.1  # 1 token per 10 s → ~6/min sustained
+
     LOG_LEVEL: str = "INFO"
     ENVIRONMENT: str = "development"
     MAX_UPLOAD_SIZE_BYTES: int = 2_147_483_648
@@ -67,6 +77,26 @@ class Settings(BaseSettings):
     OTEL_SERVICE_NAME: str = "omnivore"
     METRICS_ENABLED: bool = True
     METRICS_AUTH_TOKEN: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def _guard_weak_secrets(self) -> "Settings":
+        """Abort startup if placeholder secrets are present outside development/test."""
+        if self.ENVIRONMENT in ("development", "test"):
+            return self
+        bad: list[str] = []
+        for field, placeholder in _WEAK_DEFAULTS.items():
+            val = getattr(self, field)
+            if isinstance(val, SecretStr):
+                val = val.get_secret_value()
+            if val == placeholder:
+                bad.append(f"{field} (placeholder: {placeholder!r})")
+        if bad:
+            raise ValueError(
+                "STARTUP ABORTED — the following secrets are set to their default placeholder "
+                f"values and must be changed before running in '{self.ENVIRONMENT}' mode: "
+                + ", ".join(bad)
+            )
+        return self
 
 
 @lru_cache
