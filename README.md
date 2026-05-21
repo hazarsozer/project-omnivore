@@ -16,7 +16,8 @@ It is designed to be cloned and run on your own infrastructure. There are no hos
 | Hybrid search | BM25 + pgvector + RRF merge via `POST /v1/search` |
 | Structure-first chunking | Section boundaries respected; 512-token max, 64-token overlap |
 | Named entity recognition | People, orgs, locations, dates — spaCy en_core_web_sm |
-| LLM summaries | Abstractive summary per document — Claude Haiku, gated on `ANTHROPIC_API_KEY` |
+| LLM summaries | Abstractive summary per document — pluggable provider (Anthropic / OpenAI / Google / Ollama) |
+| Vision enrichment | Semantic captions for images and video frames — runs alongside OCR/STT; covers non-text images (photos, diagrams) |
 | Language detection | Per-chunk language detection via lingua |
 | Routing policies | Declarative per-tenant rules controlling which sinks receive chunks |
 | Multi-tenancy | Row-level security enforced in PostgreSQL; all data is tenant-isolated |
@@ -26,6 +27,28 @@ It is designed to be cloned and run on your own infrastructure. There are no hos
 | Admin frontend | Next.js 15 app at `frontend/` — upload, search, document detail, admin views |
 
 Not built (do not expect): PPTX/email/archive handlers, billing or quota tiers, sentiment/classification, RAPTOR/GraphRAG, ColPali visual retrieval.
+
+### LLM provider
+
+Summarization and vision captioning work with any of four providers — pick the one that fits your setup:
+
+| Provider | `LLM_PROVIDER` | Text default | Vision default | Key needed |
+|---|---|---|---|---|
+| Anthropic | `anthropic` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `gpt-4o-mini` | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| Google | `google` | `gemini-2.0-flash` | `gemini-2.0-flash` | `GOOGLE_API_KEY` |
+| Ollama (local) | `ollama` | `qwen2.5:7b` | `qwen2.5-vl:7b` | _(none)_ |
+
+Override the model for either task with `LLM_TEXT_MODEL` / `LLM_VISION_MODEL`. Leave enrichment off entirely by not setting any key (OCR and speech-to-text still work without it).
+
+**Zero-cost Ollama quickstart:**
+```bash
+docker run -d -p 11434:11434 ollama/ollama
+ollama pull qwen2.5:7b        # text summarization
+ollama pull qwen2.5-vl:7b     # image and video frame captioning
+# then set LLM_PROVIDER=ollama in .env
+```
+Models load on first request and unload automatically when idle.
 
 ## Prerequisites
 
@@ -240,7 +263,15 @@ All settings are read from `.env` via pydantic-settings. See `src/omnivore/confi
 | `RL_REFILL_RATE` | `10.0` | Rate limiter: tokens per second refill rate |
 | `RL_UPLOAD_COST` | `10` | Tokens consumed per document upload |
 | `RL_DEFAULT_COST` | `1` | Tokens consumed per other request |
-| `ANTHROPIC_API_KEY` | _(empty)_ | Enable Claude Haiku document summaries |
+| `LLM_PROVIDER` | `anthropic` | LLM backend: `anthropic` \| `openai` \| `google` \| `ollama` |
+| `LLM_TEXT_MODEL` | _(provider default)_ | Override text model (empty = use provider default) |
+| `LLM_VISION_MODEL` | _(provider default)_ | Override vision model (empty = use provider default) |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Required when `LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | _(empty)_ | Required when `LLM_PROVIDER=openai` |
+| `GOOGLE_API_KEY` | _(empty)_ | Required when `LLM_PROVIDER=google` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (used when `LLM_PROVIDER=ollama`) |
+| `VIDEO_FRAME_SAMPLE_INTERVAL` | `30` | Seconds between sampled video frames for vision captioning |
+| `VIDEO_MAX_VISION_FRAMES` | `20` | Max frames captioned per video |
 | `MAX_UPLOAD_SIZE_BYTES` | `2147483648` | Upload size limit (2 GB default) |
 | `MAX_QUEUE_DEPTH` | `100` | CPU queue depth before HTTP 429 |
 | `MAX_GPU_QUEUE_DEPTH` | `20` | GPU queue depth before HTTP 429 |
@@ -258,6 +289,9 @@ All settings are read from `.env` via pydantic-settings. See `src/omnivore/confi
 ```bash
 # Install dependencies
 uv sync
+
+# Activate pre-commit hooks (runs ruff + unit tests on every commit)
+uv run pre-commit install
 
 # Start required infrastructure
 docker compose up -d postgres redis minio
@@ -285,9 +319,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
 - [x] **Phase 3 — Enrichment**: Language detection (lingua); NER (spaCy); LLM summaries (Claude Haiku, optional); routing policy engine; `chunk_faithfulness` eval metric
 - [x] **Phase 4 — Multi-tenant auth**: API keys (Argon2id); RS256 JWT exchange; fine-grained scopes; Lua token-bucket rate limiting; row-level security on all tables; admin and tenant self-service endpoints
 - [x] **Phase 5 — Observability**: OTel traces → Tempo; Prometheus metrics; structlog JSON → Promtail → Loki; Grafana dashboards; W3C traceparent propagation across API → worker boundary
-- [x] **Phase 6 — Hardening**: Chaos tests; DB partitioning groundwork; cost dashboards; GUC pool-leak fix
+- [x] **Phase 6 — Hardening**: Chaos tests; DB partitioning (hash-partitioned chunks, range-partitioned jobs); cost dashboards; GUC pool-leak fix; open-source readiness (README, CI, CONTRIBUTING, DELETE endpoint, configurable CORS, partition management script)
+- [x] **Phase 7 — Vision and provider flexibility**: Visual frame processing for images and video (semantic captions via pluggable LLM alongside OCR/STT); four-provider LLM layer (Anthropic / OpenAI / Google / Ollama — zero-cost local option); pre-commit hooks (ruff + unit tests); full unit test coverage for all 11 format handlers
 
-**What's next**: PPTX/email/archive format handlers; RAPTOR/GraphRAG retrieval for multi-hop queries; billing and quota tiers; Docling PDF backend (gated on eval win > 10%).
+**What's next**: PPTX/email/archive format handlers; eval fixtures for PDF/DOCX/XLSX/audio/video/image; RAPTOR/GraphRAG retrieval for multi-hop queries; Docling PDF backend (gated on eval win > 10%).
 
 ## Architecture
 

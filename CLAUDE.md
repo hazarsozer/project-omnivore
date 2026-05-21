@@ -117,7 +117,7 @@ Never call `Settings()` directly outside of `config.py`. Never read `os.environ`
   - **L-2**: `tests/integration/test_e2e_pipeline.py::test_worker_queue_name_matches_api_pool_default` uses the literal `"arq:queue"` instead of `arq.connections.ArqRedis.default_queue_name`. If arq ever changes its default in a future version, the test would silently pass while a new wiring bug emerges. (Mitigated: `test_job_lands_in_arq_queue` does the empirical round-trip.)
 - **Phase 3 closed (2026-05-10).** All 3 HIGH issues (H-1 TextBlock filter, H-2 startup warmup, H-3 E2E enrichment assertions) fixed; L-3 chunk_faithfulness metric implemented. 283 tests passing. See [`docs/phase3-audit.md`](docs/phase3-audit.md). M-1/M-2/M-3 closed by Phase 4 (routing enforcement, tenant policy fetch, matched-rule audit). M-4/M-5 remain deferred:
   - **M-4 (Per-doc language detect)**: lingua runs N times for N chunks today. Most docs are monolingual — sample-and-propagate would be cheaper. Performance only.
-  - **M-5 (Anthropic client caching)**: client instantiated per `summarize_document` call — cache module-level keyed on api_key when LLM enrichment goes high-volume.
+  - **M-5 (Anthropic client caching)**: ~~resolved~~ — Phase 7 replaced the direct Anthropic client with `llm_client.py`; `AsyncAnthropic`/`AsyncOpenAI` are now module-level singletons instantiated per-call but the architecture is no longer tied to Anthropic alone.
 - **Phase 4 audit closed 2026-05-14.** All 2 CRITICAL + 5 HIGH issues from `docs/phase4-audit.md` fixed. 329 tests passing.
 - **Deferred from Phase 4 to Phase 5:**
   - **M-1 (E2E routing test)**: no integration test exercises a custom `routing_policy` with `sinks=[]` end-to-end.
@@ -162,6 +162,7 @@ Checklist:
 - [ ] New handler is registered in `pyproject.toml` entry points
 - [ ] Migration added if schema changed
 - [ ] `eval/` fixtures cover the format you touched
+- [ ] `uv run pre-commit run --all-files` passes (ruff + unit tests)
 
 ---
 
@@ -193,7 +194,7 @@ curl http://localhost:8000/v1/documents/{document_id}
 
 ---
 
-## Phase roadmap (current: Phase 6 — Hardening)
+## Phase roadmap (current: Phase 7 — complete)
 
 | Phase | What | Status |
 |---|---|---|
@@ -206,7 +207,8 @@ curl http://localhost:8000/v1/documents/{document_id}
 | 3 — Enrichment | Language detection (lingua), NER (spaCy `en_core_web_sm`), LLM summarization scaffold (Claude Haiku, gated on `ANTHROPIC_API_KEY`), routing policy engine (declarative rules), `chunk_faithfulness` metric in eval harness, API: `summary` + `routing_decision` on doc, `GET /v1/documents/{id}/entities` | **Done — 2026-05-10.** 283 tests passing, ruff clean, eval 8/9. Audit closed by Opus 4.7. See [`docs/phase3-audit.md`](docs/phase3-audit.md). 5 MEDIUM items deferred to Phase 4 (routing enforcement, tenant policy fetch, matched-rule audit, per-doc lang detect, Anthropic client caching). |
 | 4 — Multi-tenant | API keys (Argon2id), RS256 JWT exchange, fine-grained scopes, Lua token-bucket rate limiter, FORCE ROW LEVEL SECURITY on 6 tables, admin/tenant self-service endpoints. M-1/M-2/M-3 closed (routing enforcement, tenant policy fetch, matched-rule audit). | **Done — 2026-05-14.** 329 tests passing, ruff clean. Opus audit (`docs/phase4-audit.md`) closed: C-1 (`admin_session` now commits on clean exit), C-2 (version-counter cache invalidation), H-1 (RLS GUC set/reset in `get_db_for_tenant`), H-2 (`rate_limited` dependency on all routes), H-3 (Redis singleton in lifespan), H-4 (`VerificationError` catch in `verify_key`), H-5 (`UpdateTenantRequest` Pydantic model with policy validation), M-2 (positive admin provisioning integration test). |
 | 5 — Observability | OTel traces (spans in API + worker → Tempo via OTLP), prometheus-client metrics (`/metrics` scrape → Prometheus), structlog JSON → Promtail → Loki, Grafana dashboards (Pipeline Overview / Search / Tenants) auto-provisioned. W3C traceparent propagation across API→ARQ boundary. `docker compose --profile monitoring up -d`. Tempo v3 config fix (compactor stanza removed). | **Done — 2026-05-18.** 346 tests passing, ruff clean. NEW-H-1 GUC pool-leak fix (Opus re-audit) included. |
-| 6 — Hardening | Chaos tests, DB partitioning, cost dashboards | Ongoing |
+| 6 — Hardening | Chaos tests, DB partitioning (hash chunks, range jobs), cost dashboards, open-source readiness (README, CI, CONTRIBUTING, DELETE endpoint, configurable CORS, partition script) | **Done — 2026-05-19.** 404 tests passing, ruff clean. Opus audit closed (3 CRITICAL + 3 HIGH + 6 MEDIUM + 5 LOW). See [`docs/phase6-audit.md`](docs/phase6-audit.md). |
+| 7 — Vision & provider flexibility | Visual frame processing for images (EasyOCR + LLM caption) and video (STT + sampled-frame captions interleaved by timestamp); pluggable LLM layer (`pipeline/enrichers/llm_client.py`) supporting Anthropic, OpenAI, Google (OpenAI-compat endpoint), and Ollama (local, zero-cost); pre-commit hooks (ruff + unit tests); full unit test coverage for all 11 format handlers (PDF, XLSX previously untested) | **Done — 2026-05-21.** 380 tests passing, ruff clean. |
 
 ---
 
@@ -264,7 +266,7 @@ src/omnivore/
   pipeline/chunker.py          Structure-first chunker (512 tok, 64 overlap)
   pipeline/embeddings.py       BGE-base-en-v1.5 (768-dim); Redis cache for query embeddings
   pipeline/routing.py          evaluate_policy() — advisory in v1 (M-1 deferred to Phase 4)
-  pipeline/enrichers/          language (lingua), ner (spaCy), summarizer (Claude Haiku)
+  pipeline/enrichers/          language (lingua), ner (spaCy), summarizer, vision, llm_client (pluggable provider)
   pipeline/handlers/           One file per format; pdf, docx, text (txt+md), html, json, csv, xlsx, audio, video, image
   worker/main.py               CPU WorkerSettings (queue "arq:queue")
   worker/gpu_main.py           GPU WorkerSettings (queue "arq:gpu", max_jobs=2)
