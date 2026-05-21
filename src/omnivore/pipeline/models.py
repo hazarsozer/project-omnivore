@@ -41,7 +41,7 @@ class Block:
 @dataclass
 class Fragment:
     fragment_id: uuid.UUID = field(default_factory=uuid.uuid4)
-    kind: Literal["text", "caption", "transcript", "ocr", "code", "table_row"] = "text"
+    kind: Literal["text", "caption", "transcript", "ocr", "code", "table_row", "vision_caption"] = "text"
     content: str = ""
     position: PositionRef = field(default_factory=dict)
     confidence: float | None = None

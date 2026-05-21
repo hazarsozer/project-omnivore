@@ -31,6 +31,26 @@ uv run uvicorn omnivore.api.main:app --reload
 uv run python -m omnivore.worker.main
 ```
 
+## Pre-commit hooks
+
+Install the hooks once after cloning:
+
+```bash
+uv run pre-commit install
+```
+
+After that, every `git commit` automatically runs:
+- **ruff** — lint + autofix, then format check
+- **pytest (unit only)** — fast tests that don't need infrastructure
+
+To run the hooks manually on all files:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+The hooks skip integration and chaos tests (those need Postgres, Redis, and MinIO running). Run the full suite separately before opening a PR (see below).
+
 ## Running tests
 
 The test suite requires the infrastructure to be running.

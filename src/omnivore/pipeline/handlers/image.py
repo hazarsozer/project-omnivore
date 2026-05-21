@@ -70,6 +70,8 @@ class ImageOcrHandler:
         return cls._readers[languages]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
+        settings = get_settings()
+
         lang_override = ctx.config.get("ocr_languages")
         if lang_override:
             invalid = [lc for lc in lang_override if lc not in _SUPPORTED_OCR_LANGUAGES]
@@ -77,7 +79,7 @@ class ImageOcrHandler:
                 raise ValueError(f"Unsupported OCR languages: {invalid}")
             languages = tuple(lang_override)
         else:
-            languages = tuple(get_settings().IMAGE_OCR_LANGUAGES)
+            languages = tuple(settings.IMAGE_OCR_LANGUAGES)
 
         data = await ctx.read_blob()
 
@@ -122,9 +124,45 @@ class ImageOcrHandler:
                 )
             )
 
+        # Vision enrichment — always runs when ANTHROPIC_API_KEY is set.
+        # Gives a semantic description useful for non-text images (photos, diagrams)
+        # and adds context even for text-bearing images (screenshots, scanned docs).
+        api_key = settings.ANTHROPIC_API_KEY.get_secret_value() if settings.ANTHROPIC_API_KEY else None
+        if api_key:
+            await self._add_vision_caption(data, blob.mime_type, api_key, result, ctx)
+
         logger.info(
             "image_ocr.extracted",
             document_id=str(ctx.document_id),
-            regions=len(result.fragments),
+            regions=len([f for f in result.fragments if f.kind == "ocr"]),
+            vision_enriched=result.metadata.get("vision_enriched", False),
         )
         return result
+
+    async def _add_vision_caption(
+        self,
+        data: bytes,
+        mime_type: str,
+        api_key: str,
+        result: ExtractionResult,
+        ctx: IngestContext,
+    ) -> None:
+        from omnivore.pipeline.enrichers.vision import describe_image
+
+        try:
+            caption = await describe_image(data, api_key=api_key, mime_type=mime_type)
+            if caption:
+                result.fragments.append(
+                    Fragment(
+                        kind="vision_caption",
+                        content=caption,
+                        position=PagePosition(page=1, bbox=None),
+                    )
+                )
+                result.metadata["vision_enriched"] = True
+        except Exception:
+            logger.warning(
+                "image_ocr.vision_caption.failed",
+                document_id=str(ctx.document_id),
+                exc_info=True,
+            )

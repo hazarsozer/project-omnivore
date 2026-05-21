@@ -232,3 +232,166 @@ def test_video_handler_cost_class_is_gpu():
 def test_video_handler_accepts_common_video_mimes():
     for mime in ("video/mp4", "video/quicktime", "video/x-matroska", "video/webm"):
         assert mime in VideoHandler.accepts
+
+
+# ---------------------------------------------------------------------------
+# Vision enrichment — frame extraction and captions (Phase 7)
+# ---------------------------------------------------------------------------
+
+def _mock_settings_video(*, api_key: str | None = None, interval: int = 30, max_frames: int = 20):
+    s = MagicMock()
+    if api_key:
+        secret = MagicMock()
+        secret.get_secret_value.return_value = api_key
+        s.ANTHROPIC_API_KEY = secret
+    else:
+        s.ANTHROPIC_API_KEY = None
+    s.VIDEO_FRAME_SAMPLE_INTERVAL = interval
+    s.VIDEO_MAX_VISION_FRAMES = max_frames
+    return s
+
+
+def _stub_frame_dir(monkeypatch_or_patch, frame_count: int = 2) -> dict[str, bytes]:
+    """Simulate _extract_frames writing N JPEG files into the output_dir."""
+    import os
+
+    frame_contents: dict[str, bytes] = {}
+    for i in range(1, frame_count + 1):
+        frame_contents[f"frame_{i:04d}.jpg"] = f"fake-frame-{i}".encode()
+
+    def _fake_extract_frames(video_path, output_dir, interval, max_frames):
+        for name, data in frame_contents.items():
+            with open(os.path.join(output_dir, name), "wb") as f:
+                f.write(data)
+
+    return _fake_extract_frames, frame_contents
+
+
+async def test_vision_captions_added_when_api_key_present():
+    """With API key, frame extraction + vision produces vision_caption fragments."""
+    segs = [_make_segment(" Narrator speaks.", 0.0, 5.0)]
+    model = _stub_model(segs, _make_info())
+    fake_extract_frames, _ = _stub_frame_dir(None, frame_count=2)
+
+
+    with (
+        patch.object(VideoHandler, "_get_model", return_value=model),
+        patch("omnivore.pipeline.handlers.video._extract_audio"),
+        patch("omnivore.pipeline.handlers.video._extract_frames", side_effect=fake_extract_frames),
+        patch("omnivore.pipeline.handlers.video.get_settings",
+              return_value=_mock_settings_video(api_key="sk-test")),
+        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+    ):
+        from anthropic.types import TextBlock
+        call_count = 0
+
+        async def _vision_response(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            tb = MagicMock(spec=TextBlock)
+            tb.text = f"Scene {call_count}: a presenter speaking."
+            resp = MagicMock()
+            resp.content = [tb]
+            return resp
+
+        mock_anthropic.return_value.messages.create = _vision_response
+        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+
+    vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
+    assert len(vision_frags) == 2
+    assert result.metadata["vision_frames_captioned"] == 2
+
+
+async def test_no_vision_captions_without_api_key():
+    """Without ANTHROPIC_API_KEY, no frame extraction or vision calls happen."""
+    segs = [_make_segment(" Hello.", 0.0, 1.0)]
+    model = _stub_model(segs, _make_info())
+
+    with (
+        patch.object(VideoHandler, "_get_model", return_value=model),
+        patch("omnivore.pipeline.handlers.video._extract_audio"),
+        patch("omnivore.pipeline.handlers.video.get_settings",
+              return_value=_mock_settings_video(api_key=None)),
+        patch("omnivore.pipeline.handlers.video._extract_frames") as mock_frames,
+    ):
+        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+
+    mock_frames.assert_not_called()
+    assert all(f.kind != "vision_caption" for f in result.fragments)
+
+
+async def test_fragments_sorted_by_timestamp():
+    """Transcript and vision_caption fragments are sorted by start_ms after extraction."""
+    segs = [
+        _make_segment(" Opening narration.", 0.0, 5.0),
+        _make_segment(" Later narration.", 60.0, 65.0),
+    ]
+    model = _stub_model(segs, _make_info(duration=90.0))
+    fake_extract_frames, _ = _stub_frame_dir(None, frame_count=3)  # frames at 0s, 30s, 60s
+
+    with (
+        patch.object(VideoHandler, "_get_model", return_value=model),
+        patch("omnivore.pipeline.handlers.video._extract_audio"),
+        patch("omnivore.pipeline.handlers.video._extract_frames", side_effect=fake_extract_frames),
+        patch("omnivore.pipeline.handlers.video.get_settings",
+              return_value=_mock_settings_video(api_key="sk-test", interval=30)),
+        patch("omnivore.pipeline.enrichers.vision.AsyncAnthropic") as mock_anthropic,
+    ):
+        from anthropic.types import TextBlock
+
+        async def _vision_response(*args, **kwargs):
+            tb = MagicMock(spec=TextBlock)
+            tb.text = "A scene."
+            resp = MagicMock()
+            resp.content = [tb]
+            return resp
+
+        mock_anthropic.return_value.messages.create = _vision_response
+        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+
+    start_times = [f.position.start_ms for f in result.fragments
+                   if isinstance(f.position, TimePosition)]
+    assert start_times == sorted(start_times)
+
+
+async def test_vision_frame_failure_does_not_fail_document():
+    """If _extract_frames raises, transcript is still indexed and no exception propagates."""
+    segs = [_make_segment(" Transcript survives.", 0.0, 3.0)]
+    model = _stub_model(segs, _make_info())
+
+    with (
+        patch.object(VideoHandler, "_get_model", return_value=model),
+        patch("omnivore.pipeline.handlers.video._extract_audio"),
+        patch("omnivore.pipeline.handlers.video._extract_frames",
+              side_effect=RuntimeError("ffmpeg not found")),
+        patch("omnivore.pipeline.handlers.video.get_settings",
+              return_value=_mock_settings_video(api_key="sk-test")),
+    ):
+        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+
+    transcript_frags = [f for f in result.fragments if f.kind == "transcript"]
+    assert len(transcript_frags) == 1
+    assert transcript_frags[0].content == "Transcript survives."
+    assert all(f.kind != "vision_caption" for f in result.fragments)
+
+
+async def test_extract_frames_ffmpeg_command():
+    """_extract_frames issues correct fps filter and vframes cap."""
+    import subprocess
+
+    captured_cmds: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        result = MagicMock()
+        result.returncode = 0
+        return result
+
+    with patch.object(subprocess, "run", side_effect=_fake_run):
+        from omnivore.pipeline.handlers.video import _extract_frames
+        _extract_frames("/tmp/vid.mp4", "/tmp/frames", interval=30, max_frames=5)
+
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+    assert "fps=1/30" in " ".join(cmd)
+    assert "5" in cmd  # -vframes 5

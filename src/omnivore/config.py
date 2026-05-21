@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     MAX_QUEUE_DEPTH: int = 100     # reject new uploads (HTTP 429) when CPU queue exceeds this
     MAX_GPU_QUEUE_DEPTH: int = 20  # same guard for GPU queue (audio/video/image; max_jobs=2)
 
+    # Vision enrichment (requires ANTHROPIC_API_KEY)
+    VIDEO_FRAME_SAMPLE_INTERVAL: int = 30  # seconds between sampled frames
+    VIDEO_MAX_VISION_FRAMES: int = 20      # hard cap on frames per video
+
     # Phase 6 — Hardening
     ALLOWED_ORIGINS: list[str] = ["*"]
 

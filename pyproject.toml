@@ -65,6 +65,7 @@ dev = [
     "testcontainers[postgres,redis]",
     "ruff>=0.4",
     "pyright>=1.1",
+    "pre-commit>=4.6.0",
 ]
 
 [build-system]
