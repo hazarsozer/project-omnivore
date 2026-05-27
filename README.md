@@ -16,8 +16,8 @@ It is designed to be cloned and run on your own infrastructure. There are no hos
 | Hybrid search | BM25 + pgvector + RRF merge via `POST /v1/search` |
 | Structure-first chunking | Section boundaries respected; 512-token max, 64-token overlap |
 | Named entity recognition | People, orgs, locations, dates — spaCy en_core_web_sm |
-| LLM summaries | Abstractive summary per document — pluggable provider (Anthropic / OpenAI / Google / Ollama) |
-| Vision enrichment | Semantic captions for images and video frames — runs alongside OCR/STT; covers non-text images (photos, diagrams) |
+| LLM summaries | Abstractive summary per document — pluggable provider (Anthropic / OpenAI / Google / Ollama); opt-in per tenant |
+| Vision enrichment | Semantic captions for images and video frames — runs alongside OCR/STT; covers non-text images (photos, diagrams); opt-in per tenant |
 | Language detection | Per-chunk language detection via lingua |
 | Routing policies | Declarative per-tenant rules controlling which sinks receive chunks |
 | Multi-tenancy | Row-level security enforced in PostgreSQL; all data is tenant-isolated |
@@ -39,7 +39,18 @@ Summarization and vision captioning work with any of four providers — pick the
 | Google | `google` | `gemini-2.0-flash` | `gemini-2.0-flash` | `GOOGLE_API_KEY` |
 | Ollama (local) | `ollama` | `qwen2.5:7b` | `qwen2.5-vl:7b` | _(none)_ |
 
-Override the model for either task with `LLM_TEXT_MODEL` / `LLM_VISION_MODEL`. Leave enrichment off entirely by not setting any key (OCR and speech-to-text still work without it).
+Override the model for either task with `LLM_TEXT_MODEL` / `LLM_VISION_MODEL`.
+
+LLM enrichment (summaries and vision captions) is **off by default** even when a provider is configured. Enable it per-tenant by patching the tenant config:
+
+```bash
+curl -X PUT http://localhost:8000/v1/tenant/config \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"llm_enrichment_enabled": true}'
+```
+
+OCR and speech-to-text always run regardless of this flag or whether any LLM key is set.
 
 **Zero-cost Ollama quickstart:**
 ```bash
