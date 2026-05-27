@@ -20,6 +20,15 @@ Strategy
 8. Re-enable RLS + recreate the tenant_isolation policy on the parent.
 9. Drop the temporary backup table.
 
+Locking Warning
+---------------
+This migration holds an ACCESS EXCLUSIVE lock on core.chunks for the full
+duration of the data-copy phase (step 5). On a populated production database
+this means hard downtime — no reads or writes can proceed against that table
+while the copy runs. Estimated duration: ~1 min per 10 M rows on typical
+cloud Postgres. Plan a maintenance window or use a logical-replication-based
+strategy (e.g. pg_repack) for zero-downtime partitioning on live data.
+
 Downgrade
 ---------
 Reversing a partition conversion is inherently destructive (the original table

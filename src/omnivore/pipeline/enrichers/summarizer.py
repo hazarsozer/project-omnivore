@@ -92,7 +92,7 @@ def _build_content(chunks: list[Chunk], max_chars: int = _MAX_INPUT_CHARS) -> st
         text = chunk.content
         remaining = max_chars - total
         parts.append(text[:remaining])
-        total += len(text)
+        total += len(text[:remaining])
     return "\n\n".join(parts)
 
 

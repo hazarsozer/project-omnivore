@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, Search as SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -28,22 +28,30 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
+  const requestIdRef = useRef(0);
 
   const onSearch = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!query.trim() || loading) return;
+    if (!query.trim()) return;
+    const myId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     setResults(null);
     const t0 = performance.now();
     try {
       const data = await api.search({ query, mode, top_k: topK });
-      setResults(data);
-      setElapsed(performance.now() - t0);
+      if (requestIdRef.current === myId) {
+        setResults(data);
+        setElapsed(performance.now() - t0);
+      }
     } catch (err) {
-      setError(err instanceof APIError ? err.detail || err.message : String(err));
+      if (requestIdRef.current === myId) {
+        setError(err instanceof APIError ? err.detail || err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === myId) {
+        setLoading(false);
+      }
     }
   };
 

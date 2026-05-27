@@ -11,10 +11,18 @@ from omnivore.pipeline.models import PagePosition
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ctx(doc_id: uuid.UUID | None = None, ocr_languages: list[str] | None = None) -> MagicMock:
+def _make_ctx(
+    doc_id: uuid.UUID | None = None,
+    ocr_languages: list[str] | None = None,
+    llm_enrichment_enabled: bool = False,
+) -> MagicMock:
     ctx = MagicMock()
     ctx.document_id = doc_id or uuid.uuid4()
-    ctx.config = {"ocr_languages": ocr_languages} if ocr_languages else {}
+    config: dict = {}
+    if ocr_languages:
+        config["ocr_languages"] = ocr_languages
+    config["llm_enrichment_enabled"] = llm_enrichment_enabled
+    ctx.config = config
     # Return a minimal valid PNG so PIL can open it
     import io
 
@@ -254,7 +262,7 @@ def _mock_settings(*, llm_on: bool = True, ocr_languages: list[str] | None = Non
 
 
 async def test_vision_caption_added_when_llm_configured():
-    """When llm_configured() is True, a vision_caption fragment is appended."""
+    """When llm_configured() is True and consent is granted, a vision_caption fragment is appended."""
     reader = MagicMock()
     reader.readtext = MagicMock(return_value=[_easyocr_result("Some text")])
 
@@ -268,7 +276,7 @@ async def test_vision_caption_added_when_llm_configured():
             return_value="A white background with the words Some text.",
         ),
     ):
-        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
+        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
     assert len(vision_frags) == 1
@@ -305,7 +313,7 @@ async def test_vision_caption_on_non_text_image():
             return_value="A golden retriever playing in a park.",
         ),
     ):
-        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
+        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     assert [f for f in result.fragments if f.kind == "ocr"] == []
     assert len([f for f in result.fragments if f.kind == "vision_caption"]) == 1
@@ -327,7 +335,7 @@ async def test_vision_caption_failure_does_not_fail_document():
             side_effect=RuntimeError("LLM unavailable"),
         ),
     ):
-        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
+        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     assert len([f for f in result.fragments if f.kind == "ocr"]) == 1
     assert all(f.kind != "vision_caption" for f in result.fragments)
@@ -348,6 +356,6 @@ async def test_vision_enriched_metadata_flag():
             return_value="A sunset over the ocean.",
         ),
     ):
-        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx())
+        result = await ImageOcrHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     assert result.metadata["vision_enriched"] is True

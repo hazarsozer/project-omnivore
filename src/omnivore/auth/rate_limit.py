@@ -10,6 +10,8 @@ from omnivore.config import get_settings
 # Singleton — set by api/main.py lifespan and worker on_startup.
 # Falls back to a fresh connection when None (e.g. in unit tests).
 _redis_client: aioredis.Redis | None = None
+_lua_script_obj: object = None     # redis Script — registered once, reused across calls
+_lua_script_client: object = None  # the client the script was registered on; invalidates cache on change
 
 
 def _get_redis() -> aioredis.Redis:
@@ -18,8 +20,18 @@ def _get_redis() -> aioredis.Redis:
     return aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
 
 
+def _get_script(r: aioredis.Redis) -> object:
+    global _lua_script_obj, _lua_script_client
+    if _lua_script_obj is None or _lua_script_client is not r:
+        _lua_script_obj = r.register_script(_LUA_SCRIPT)
+        _lua_script_client = r
+    return _lua_script_obj
+
+
 # Lua script: atomic token-bucket refill + consume.
 # Returns [allowed(0|1), remaining_tokens_float*100, capacity].
+# Registered lazily on first use; cached per Redis client instance to avoid
+# re-computing SHA1 on every call.
 _LUA_SCRIPT = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
@@ -64,7 +76,7 @@ async def check_auth_rate_limit(client_ip: str) -> RateLimitResult:
     now_ms = int(time.time() * 1000)
 
     r = _get_redis()
-    script = r.register_script(_LUA_SCRIPT)
+    script = _get_script(r)
     result = await script(
         keys=[bucket_key],
         args=[settings.RL_AUTH_CAPACITY, settings.RL_AUTH_REFILL_RATE, 1, now_ms],
@@ -91,7 +103,7 @@ async def check_rate_limit(
     now_ms = int(time.time() * 1000)
 
     r = _get_redis()
-    script = r.register_script(_LUA_SCRIPT)
+    script = _get_script(r)
     result = await script(keys=[bucket_key], args=[_capacity, _rate, _cost, now_ms])
 
     allowed = bool(result[0])

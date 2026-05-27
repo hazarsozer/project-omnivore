@@ -6,6 +6,7 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,11 @@ from omnivore.pipeline.routing import validate_policy
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
 logger = structlog.get_logger(__name__)
+
+
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(default="key", min_length=1, max_length=100)
+    scopes: list[str] | None = Field(default=None, description="Scopes to grant; defaults to caller's scopes")
 
 
 @router.get("")
@@ -112,12 +118,12 @@ async def list_own_keys(
 
 @router.post("/api-keys", status_code=201)
 async def create_own_key(
-    body: dict,
+    body: CreateApiKeyRequest,
     auth: Annotated[AuthContext, Depends(require_scope("tenant:manage"))],
     _rl: Annotated[None, Depends(rate_limited())] = None,
 ) -> APIResponse[dict]:
-    name = body.get("name", "key")
-    scopes = body.get("scopes", list(auth.scopes))
+    name = body.name
+    scopes = body.scopes if body.scopes is not None else list(auth.scopes)
     # Prevent privilege escalation — can only grant scopes the caller already has
     scopes = [s for s in scopes if s in auth.scopes]
 

@@ -12,9 +12,14 @@ from omnivore.pipeline.models import TimePosition
 # Helpers (reuse pattern from test_handler_audio)
 # ---------------------------------------------------------------------------
 
-def _make_ctx(doc_id: uuid.UUID | None = None, data: bytes = b"fake-video-bytes") -> MagicMock:
+def _make_ctx(
+    doc_id: uuid.UUID | None = None,
+    data: bytes = b"fake-video-bytes",
+    llm_enrichment_enabled: bool = False,
+) -> MagicMock:
     ctx = MagicMock()
     ctx.document_id = doc_id or uuid.uuid4()
+    ctx.config = {"llm_enrichment_enabled": llm_enrichment_enabled}
 
     async def _stream_blob():
         yield data
@@ -264,7 +269,7 @@ def _stub_frame_dir(monkeypatch_or_patch, frame_count: int = 2) -> dict[str, byt
 
 
 async def test_vision_captions_added_when_llm_configured():
-    """With LLM configured, frame extraction + vision produces vision_caption fragments."""
+    """With LLM configured and consent granted, frame extraction + vision produces vision_caption fragments."""
     segs = [_make_segment(" Narrator speaks.", 0.0, 5.0)]
     model = _stub_model(segs, _make_info())
     fake_extract_frames, _ = _stub_frame_dir(None, frame_count=2)
@@ -284,7 +289,7 @@ async def test_vision_captions_added_when_llm_configured():
         patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
         patch("omnivore.pipeline.enrichers.vision.describe_image", side_effect=_fake_describe),
     ):
-        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+        result = await VideoHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     vision_frags = [f for f in result.fragments if f.kind == "vision_caption"]
     assert len(vision_frags) == 2
@@ -330,7 +335,7 @@ async def test_fragments_sorted_by_timestamp():
         patch("omnivore.pipeline.enrichers.llm_client.llm_configured", return_value=True),
         patch("omnivore.pipeline.enrichers.vision.describe_image", side_effect=_fake_describe),
     ):
-        result = await VideoHandler().extract(_make_blob(), _make_ctx())
+        result = await VideoHandler().extract(_make_blob(), _make_ctx(llm_enrichment_enabled=True))
 
     start_times = [f.position.start_ms for f in result.fragments
                    if isinstance(f.position, TimePosition)]

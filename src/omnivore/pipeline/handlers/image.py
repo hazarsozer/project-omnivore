@@ -128,7 +128,7 @@ class ImageOcrHandler:
         # Gives a semantic description useful for non-text images (photos, diagrams)
         # and adds context even for text-bearing images (screenshots, scanned docs).
         from omnivore.pipeline.enrichers.llm_client import llm_configured
-        if llm_configured(settings):
+        if llm_configured(settings) and ctx.config.get("llm_enrichment_enabled", False):
             await self._add_vision_caption(data, blob.mime_type, settings, result, ctx)
 
         logger.info(

@@ -122,7 +122,7 @@ class VideoHandler:
             # Acts as an enhancer alongside the transcript and as the only content
             # source for silent videos or visual-only content (slides, demos).
             from omnivore.pipeline.enrichers.llm_client import llm_configured
-            if llm_configured(settings):
+            if llm_configured(settings) and ctx.config.get("llm_enrichment_enabled", False):
                 await self._add_vision_captions(
                     vid_path=vid_path,
                     loop=loop,

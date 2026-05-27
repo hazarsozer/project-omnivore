@@ -25,6 +25,14 @@ Strategy
 Note: core.jobs has NO RLS (it is not in the _TENANT_TABLES list from
 migration 0008), so no RLS steps are needed here.
 
+Locking Warning
+---------------
+This migration holds an ACCESS EXCLUSIVE lock on core.jobs for the full
+duration of the data-copy phase (step 5). On a populated production database
+this means hard downtime — no reads or writes can proceed against that table
+while the copy runs. Plan a maintenance window or use pg_repack for
+zero-downtime partitioning on live data.
+
 Downgrade
 ---------
 Reversing a partition conversion is inherently destructive. The downgrade

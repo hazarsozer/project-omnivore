@@ -189,7 +189,9 @@ async def _run_ingest(
 
         # M-2: Read tenant routing policy from config
         tenant = await db.get(Tenant, t_id)
-        tenant_policy = (tenant.config or {}).get("routing_policy") if tenant else None
+        tenant_cfg = (tenant.config or {}) if tenant else {}
+        tenant_policy = tenant_cfg.get("routing_policy")
+        llm_enrichment_enabled = bool(tenant_cfg.get("llm_enrichment_enabled", False))
 
         handler = handler_cls()
         bucket, key = _parse_storage_uri(doc.storage_uri)
@@ -199,7 +201,7 @@ async def _run_ingest(
             tenant_id=t_id,
             blob=blob,
             filename=doc.filename,
-            config=config_snapshot,
+            config={**config_snapshot, "llm_enrichment_enabled": llm_enrichment_enabled},
             _settings=settings,
         )
 
@@ -316,9 +318,11 @@ async def _run_ingest(
             except Exception:
                 logger.warning("ner.failed", document_id=document_id, exc_info=True)
 
-        # LLM summarization — non-fatal
-        with _get_tracer("omnivore.worker").start_as_current_span("omnivore.ingest.enrich.summarize"):
-            summary = await summarize_document(chunks, settings=settings, filename=doc.filename)
+        # LLM summarization — non-fatal; gated on per-tenant llm_enrichment_enabled flag
+        summary = None
+        if llm_enrichment_enabled:
+            with _get_tracer("omnivore.worker").start_as_current_span("omnivore.ingest.enrich.summarize"):
+                summary = await summarize_document(chunks, settings=settings, filename=doc.filename)
 
         # Routing summary for document-level audit
         routing_decision = _compute_routing_decision(chunks, chunk_sinks, tenant_policy)
