@@ -121,6 +121,15 @@ uv run python -m omnivore.worker.main
 uv run python -m omnivore.worker.gpu_main
 ```
 
+> **Audio/video transcription works without a GPU.** faster-whisper automatically
+> falls back to CPU when CUDA isn't usable (including the common case where the GPU
+> is visible to PyTorch but ctranslate2's CUDA libraries aren't loadable), so jobs
+> never hard-fail — CPU is just slower. For GPU-accelerated transcription, install
+> the CUDA libraries faster-whisper needs:
+> ```bash
+> uv pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+> ```
+
 ### 5. Bootstrap your first tenant and API key
 
 The admin endpoints are protected by `ADMIN_BOOTSTRAP_TOKEN`. Use them once to create a tenant and mint an API key, then use that key for all subsequent requests.

@@ -49,20 +49,9 @@ class AudioHandler:
         if cls._model is None:
             with _model_lock:
                 if cls._model is None:
-                    import torch
-                    from faster_whisper import WhisperModel
+                    from omnivore.pipeline.handlers._whisper import load_whisper_model
 
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
-                    compute_type = "float16" if device == "cuda" else "int8"
-                    cls._model = WhisperModel(
-                        WHISPER_MODEL_SIZE, device=device, compute_type=compute_type
-                    )
-                    logger.info(
-                        "audio.model.loaded",
-                        size=WHISPER_MODEL_SIZE,
-                        device=device,
-                        compute_type=compute_type,
-                    )
+                    cls._model = load_whisper_model(WHISPER_MODEL_SIZE)
         return cls._model  # type: ignore[return-value]
 
     async def extract(self, blob: BlobRef, ctx: IngestContext) -> ExtractionResult:
