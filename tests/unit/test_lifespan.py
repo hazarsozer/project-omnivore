@@ -106,13 +106,14 @@ def test_lifespan_rejects_truncated_private_key(monkeypatch):
         async with m.lifespan(FastAPI()):
             pass
 
-    with pytest.raises(RuntimeError, match="JWT_PRIVATE_KEY_PEM appears truncated"):
+    with pytest.raises(RuntimeError, match="JWT_PRIVATE_KEY_PEM did not resolve to a valid PEM"):
         asyncio.run(_run())
 
 
 def test_lifespan_rejects_pem_without_begin_marker(monkeypatch):
-    """C-2 tighter: a 200+ char value without BEGIN marker must be rejected."""
-    # Long string but no PEM header — what you'd get pasting only base64 body
+    """C-2 tighter: a long value that doesn't resolve to a PEM must be rejected."""
+    # base64-looking string that decodes to non-PEM garbage (no BEGIN marker even
+    # after normalization) — distinct from a real base64-encoded PEM, which is now valid.
     monkeypatch.setenv("JWT_PRIVATE_KEY_PEM", "A" * 500)
     monkeypatch.setenv("JWT_PUBLIC_KEY_PEM", "")
 
@@ -128,7 +129,7 @@ def test_lifespan_rejects_pem_without_begin_marker(monkeypatch):
         async with m.lifespan(FastAPI()):
             pass
 
-    with pytest.raises(RuntimeError, match="JWT_PRIVATE_KEY_PEM appears truncated"):
+    with pytest.raises(RuntimeError, match="JWT_PRIVATE_KEY_PEM did not resolve to a valid PEM"):
         asyncio.run(_run())
 
 

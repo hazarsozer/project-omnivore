@@ -80,27 +80,19 @@ cp .env.example .env
 
 ### 2. Generate the JWT keypair
 
-The RS256 keypair is required for API key auth. Generate it once and paste the PEM content into `.env`.
+The RS256 keypair is required for API key auth. Generate it once and store both keys as a **single line of base64** in `.env`:
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out private.pem
 openssl rsa -pubout -in private.pem -out public.pem
+
+# Append both keys as single-line base64 (docker-safe):
+echo "JWT_PRIVATE_KEY_PEM=$(base64 -w0 private.pem)" >> .env
+echo "JWT_PUBLIC_KEY_PEM=$(base64 -w0 public.pem)"   >> .env
+# macOS: use `base64 -i private.pem` (no -w0 flag)
 ```
 
-Then open `.env` and set the two PEM fields. **The values must be wrapped in double quotes** so the `.env` parser preserves the line breaks:
-
-```
-JWT_PRIVATE_KEY_PEM="-----BEGIN PRIVATE KEY-----
-MIIEvQIBADA...
------END PRIVATE KEY-----"
-
-JWT_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----
-MIIBIjANBg...
------END PUBLIC KEY-----"
-```
-
-- Set `JWT_PRIVATE_KEY_PEM` to the full content of `private.pem` (quoted as shown above).
-- Set `JWT_PUBLIC_KEY_PEM` to the full content of `public.pem` (quoted as shown above).
+> **Why base64?** `docker compose`'s `.env` parser does not support multi-line values, so pasting a raw multi-line PEM breaks `docker compose up` with a parse error. A single line of base64 parses identically everywhere. The app normalizes base64, raw PEM, and `\n`-escaped forms to real PEM at load time, so a raw PEM still works when running outside docker (uv/uvicorn).
 - Set `ADMIN_BOOTSTRAP_TOKEN` to a strong random string:
   ```bash
   openssl rand -hex 32

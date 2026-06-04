@@ -102,24 +102,24 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings)
 
-    # C-2: Validate JWT keys are non-empty, well-formed PEMs.
-    # Catches (a) unquoted multi-line PEM that loaded only the BEGIN header,
-    # (b) base64 bodies pasted without the BEGIN/END boundary markers.
+    # C-2: Validate JWT keys resolve to non-empty, well-formed PEMs. config.py
+    # normalizes base64 / raw / \n-escaped input to real PEM; this catches values
+    # that still don't contain a complete BEGIN/END block (truncated or garbage).
     _priv = settings.JWT_PRIVATE_KEY_PEM.get_secret_value()
     _pub = settings.JWT_PUBLIC_KEY_PEM
     if _priv and not _is_valid_pem(_priv, min_length=200):
         raise RuntimeError(
-            f"JWT_PRIVATE_KEY_PEM appears truncated or malformed (length {len(_priv)}). "
-            "Wrap the full PEM in double quotes in .env, including the "
-            "'-----BEGIN PRIVATE KEY-----' and '-----END PRIVATE KEY-----' boundary lines. "
-            "See README §2 'Generate the JWT keypair'."
+            f"JWT_PRIVATE_KEY_PEM did not resolve to a valid PEM (resolved length {len(_priv)}). "
+            "Set it to a base64-encoded PEM (recommended, docker-safe) or a raw PEM "
+            "with the '-----BEGIN PRIVATE KEY-----' / '-----END PRIVATE KEY-----' lines intact. "
+            "See .env.example / README §2 'Generate the JWT keypair'."
         )
     if _pub and not _is_valid_pem(_pub, min_length=100):
         raise RuntimeError(
-            f"JWT_PUBLIC_KEY_PEM appears truncated or malformed (length {len(_pub)}). "
-            "Wrap the full PEM in double quotes in .env, including the "
-            "'-----BEGIN PUBLIC KEY-----' and '-----END PUBLIC KEY-----' boundary lines. "
-            "See README §2 'Generate the JWT keypair'."
+            f"JWT_PUBLIC_KEY_PEM did not resolve to a valid PEM (resolved length {len(_pub)}). "
+            "Set it to a base64-encoded PEM (recommended, docker-safe) or a raw PEM "
+            "with the '-----BEGIN PUBLIC KEY-----' / '-----END PUBLIC KEY-----' lines intact. "
+            "See .env.example / README §2 'Generate the JWT keypair'."
         )
 
     # Observability — set up before anything else so early logs get trace_id

@@ -1,6 +1,7 @@
+import base64
 from functools import lru_cache
 
-from pydantic import SecretStr, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _WEAK_DEFAULTS: dict[str, str] = {
@@ -8,6 +9,34 @@ _WEAK_DEFAULTS: dict[str, str] = {
     "ADMIN_BOOTSTRAP_TOKEN": "change-me-before-first-run",
     "MINIO_SECRET_KEY": "omnivore123",
 }
+
+
+def _decode_pem(value: str) -> str:
+    """Normalize a JWT key env value into real PEM text.
+
+    Accepts three env-friendly encodings and always returns PEM with real
+    newlines:
+
+    * **base64-encoded PEM** — recommended; a single line with no quoting,
+      newline, or escaping pitfalls, so it parses identically under docker
+      compose interpolation, ``env_file``, python-dotenv, and shells.
+    * **raw multi-line PEM** beginning with ``-----BEGIN`` — used as-is (and any
+      literal ``\\n`` escapes are unescaped). Keeps existing setups working.
+    * **single-line PEM with literal ``\\n`` escapes**.
+
+    Malformed input is returned unchanged; the startup check in ``api/main.py``
+    surfaces a clear error rather than failing cryptically inside PyJWT.
+    """
+    if not value:
+        return value
+    stripped = value.strip()
+    if "-----BEGIN" in stripped:
+        return stripped.replace("\\n", "\n")
+    try:
+        decoded = base64.b64decode(stripped, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return value
+    return decoded if "-----BEGIN" in decoded else value
 
 
 class Settings(BaseSettings):
@@ -39,8 +68,9 @@ class Settings(BaseSettings):
     LLM_VISION_MODEL: str = "" # empty = use provider default
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
-    # Phase 4 — Auth
-    # Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0
+    # Phase 4 — Auth. JWT_*_KEY_PEM accept a base64-encoded PEM (recommended,
+    # docker-safe) or a raw PEM; both are normalized to real PEM at load time.
+    # See .env.example / README §2 for the generator commands.
     JWT_PRIVATE_KEY_PEM: SecretStr = SecretStr("")
     JWT_PUBLIC_KEY_PEM: str = ""
     JWT_ALGORITHM: str = "RS256"
@@ -77,6 +107,14 @@ class Settings(BaseSettings):
     OTEL_SERVICE_NAME: str = "omnivore"
     METRICS_ENABLED: bool = True
     METRICS_AUTH_TOKEN: SecretStr | None = None
+
+    @field_validator("JWT_PRIVATE_KEY_PEM", "JWT_PUBLIC_KEY_PEM", mode="before")
+    @classmethod
+    def _normalize_jwt_pem(cls, v: object) -> object:
+        """Accept base64 / raw / \\n-escaped PEM for either JWT key (see _decode_pem)."""
+        if isinstance(v, SecretStr):
+            v = v.get_secret_value()
+        return _decode_pem(v) if isinstance(v, str) else v
 
     @model_validator(mode="after")
     def _guard_weak_secrets(self) -> "Settings":
