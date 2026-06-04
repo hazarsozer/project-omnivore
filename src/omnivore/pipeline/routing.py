@@ -20,10 +20,14 @@ from typing import Any
 
 DEFAULT_POLICY: dict[str, Any] = {
     "default_sinks": ["relational", "vector"],
+    # text/transcript chunks must reach BOTH sinks: 'relational' powers BM25
+    # (content_tsv) and 'vector' powers embedding search. Routing prose to 'vector'
+    # only makes BM25 — and therefore the lexical half of hybrid search — return
+    # nothing for documents, because _bm25_search filters on 'relational' = ANY(sinks).
     "rules": [
         {"match": {"kind": "table_row"}, "sinks": ["relational"]},
-        {"match": {"kind": "text"}, "sinks": ["vector"]},
-        {"match": {"kind": "transcript"}, "sinks": ["vector"]},
+        {"match": {"kind": "text"}, "sinks": ["relational", "vector"]},
+        {"match": {"kind": "transcript"}, "sinks": ["relational", "vector"]},
     ],
 }
 

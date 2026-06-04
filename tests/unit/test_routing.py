@@ -4,18 +4,22 @@ from omnivore.pipeline.routing import DEFAULT_POLICY, evaluate_policy, validate_
 
 
 class TestEvaluatePolicy:
-    def test_text_routes_to_vector_by_default(self):
+    def test_text_routes_to_relational_and_vector_by_default(self):
+        # Prose must reach BOTH sinks so BM25 (relational) and vector retrieve it;
+        # the lexical half of hybrid search depends on 'relational' for documents.
         sinks, _ = evaluate_policy("text", None, {})
         assert "vector" in sinks
+        assert "relational" in sinks
 
     def test_table_row_routes_to_relational_by_default(self):
         sinks, _ = evaluate_policy("table_row", None, {})
         assert "relational" in sinks
         assert "vector" not in sinks
 
-    def test_transcript_routes_to_vector_by_default(self):
+    def test_transcript_routes_to_relational_and_vector_by_default(self):
         sinks, _ = evaluate_policy("transcript", None, {})
         assert "vector" in sinks
+        assert "relational" in sinks
 
     def test_unknown_kind_uses_default_sinks(self):
         sinks, _ = evaluate_policy("unknown_kind", None, {})
