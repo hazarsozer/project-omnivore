@@ -1,0 +1,15 @@
+{
+  "fixture_id": "audio-001",
+  "format": "audio",
+  "description": "Short WAV clip with one spoken sentence for STT transcription",
+  "expected_handler": "audio",
+  "expected_mime": "audio/x-wav",
+  "expected_fragment_count_min": 1,
+  "expected_fragment_count_max": 10,
+  "expected_chunk_count_min": 1,
+  "expected_chunk_count_max": 5,
+  "expected_table_count": 0,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": false
+}

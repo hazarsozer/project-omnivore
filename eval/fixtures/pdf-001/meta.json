@@ -1,0 +1,15 @@
+{
+  "fixture_id": "pdf-001",
+  "format": "pdf",
+  "description": "PDF with a title heading and two body paragraphs describing the pipeline",
+  "expected_handler": "pdf",
+  "expected_mime": "application/pdf",
+  "expected_fragment_count_min": 1,
+  "expected_fragment_count_max": 30,
+  "expected_chunk_count_min": 1,
+  "expected_chunk_count_max": 10,
+  "expected_table_count": 0,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": false
+}

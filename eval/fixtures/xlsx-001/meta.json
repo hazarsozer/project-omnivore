@@ -1,0 +1,15 @@
+{
+  "fixture_id": "xlsx-001",
+  "format": "xlsx",
+  "description": "XLSX with one sheet: a header row and five employee data rows",
+  "expected_handler": "xlsx",
+  "expected_mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "expected_chunk_count_min": 0,
+  "expected_chunk_count_max": 5,
+  "expected_table_count": 1,
+  "expected_table_headers": ["id", "name", "department", "salary"],
+  "expected_row_count": 5,
+  "difficulty": "easy",
+  "languages": ["en"],
+  "has_tables": true
+}
