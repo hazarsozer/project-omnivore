@@ -34,6 +34,36 @@ _STREAM_CHUNK = 1 << 20  # 1 MB read chunks
 # HTML <!doctype, etc.) without buffering the whole upload in RAM.
 _MIME_SNIFF_BYTES = 2048
 
+# libmagic returns generic container/text types for several real formats
+# (.xlsx sniffs as application/zip; .md / .csv sniff as text/plain). When it
+# does, fall back to the filename extension's canonical MIME so handler
+# resolution still works. Content-based detection is kept for everything else,
+# so a mislabeled .txt that is really a PDF still routes to the PDF handler.
+_GENERIC_MIMES = frozenset({
+    "text/plain", "application/zip", "application/octet-stream",
+    "application/x-empty", "inode/x-empty",
+})
+_EXT_CANONICAL_MIME = {
+    "md": "text/markdown",
+    "markdown": "text/markdown",
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def _effective_mime(magic_mime: str, filename: str | None) -> str:
+    """Refine a generic libmagic MIME using the filename extension when that
+    resolves to a registered handler (e.g. .xlsx -> the spreadsheet handler,
+    .md -> the markdown handler instead of plain text)."""
+    if magic_mime not in _GENERIC_MIMES or not filename or "." not in filename:
+        return magic_mime
+    ext = filename.rsplit(".", 1)[-1].lower()
+    candidate = _EXT_CANONICAL_MIME.get(ext)
+    if candidate and registry.resolve(candidate) is not None:
+        return candidate
+    return magic_mime
+
 
 @router.post("", status_code=202)
 async def upload_document(
@@ -73,7 +103,7 @@ async def upload_document(
             mime_header += chunk[: _MIME_SNIFF_BYTES - len(mime_header)]
 
     sha256_digest = hasher.digest()
-    detected_mime = magic.from_buffer(mime_header, mime=True)
+    detected_mime = _effective_mime(magic.from_buffer(mime_header, mime=True), file.filename)
 
     # Dedup check
     existing = await db.scalar(
