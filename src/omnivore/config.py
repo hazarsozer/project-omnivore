@@ -99,6 +99,14 @@ class Settings(BaseSettings):
     VIDEO_MAX_VISION_FRAMES: int = 20      # hard cap on frames per video
 
     # Phase 6 — Hardening
+    # CORS allowed origins. Defaults to ["*"] (wildcard) for local-dev convenience
+    # so frontends on any localhost port can hit the API without a proxy.
+    # SAFETY: when this is the wildcard ["*"], api/main.py disables credentialed
+    # CORS (allow_credentials=_origins != ["*"]), so no cross-origin request can
+    # send cookies/Authorization under the wildcard — wildcard + no-credentials is
+    # the browser-mandated safe combination.
+    # PRODUCTION: set this to an explicit list (e.g. ["https://app.example.com"]) to
+    # both lock down origins and re-enable credentialed requests.
     ALLOWED_ORIGINS: list[str] = ["*"]
 
     # Phase 5 — Observability

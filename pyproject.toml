@@ -68,6 +68,7 @@ dev = [
     "pyright>=1.1",
     "pre-commit>=4.6.0",
     "reportlab>=4.5.1",
+    "pip-audit>=2.7.3",
 ]
 
 [build-system]

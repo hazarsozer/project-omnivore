@@ -100,6 +100,16 @@ jobs:
       - name: Run ruff
         run: uv run ruff check src/ tests/
 
+      # SCA: scan the resolved dependency tree for known CVEs (OSV/PyPI advisories).
+      # Non-blocking (continue-on-error) so unrelated transitive CVEs don't gate
+      # merges — it's a visible signal, not a hard gate. Tighten to a hard fail once
+      # the tree is clean. The spaCy model `en-core-web-sm` installs from a GitHub URL
+      # (not PyPI) and is auto-skipped; we intentionally omit `--strict` so that skip
+      # alone does not fail the step.
+      - name: Run pip-audit (dependency vulnerability scan)
+        continue-on-error: true
+        run: uv run pip-audit --progress-spinner off
+
       - name: Run tests
         env:
           DATABASE_URL: postgresql+asyncpg://omnivore:omnivore@localhost:5432/omnivore

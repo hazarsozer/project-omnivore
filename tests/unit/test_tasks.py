@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from omnivore.pipeline.models import Chunk as PipelineChunk
 from omnivore.pipeline.models import ExtractionResult
-from omnivore.worker.tasks import gpu_ingest_dispatch, ingest_dispatch, outbox_relay
+from omnivore.worker.tasks import (
+    _compute_routing_decision,
+    gpu_ingest_dispatch,
+    ingest_dispatch,
+    outbox_relay,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -779,3 +784,48 @@ async def test_ingest_dispatch_handler_extract_fails_stores_retry_payload():
     assert rp["kwargs"]["document_id"] == str(doc_id)
     assert rp["kwargs"]["mime"] == "application/fake"
     assert rp["kwargs"]["config_snapshot"] == {"key": "val"}
+
+
+# ---------------------------------------------------------------------------
+# _compute_routing_decision — document-level routing summary
+# ---------------------------------------------------------------------------
+
+class TestComputeRoutingDecision:
+    """_compute_routing_decision aggregates per-chunk sinks into a doc-level summary.
+
+    The function ignores its `chunks` argument (it only counts `chunk_sinks`), so
+    an empty chunk list is fine — coverage focuses on sink counting + policy name.
+    """
+
+    def test_default_policy_name_when_tenant_policy_is_none(self):
+        sinks = [frozenset({"relational", "vector"}), frozenset({"relational"})]
+        decision = _compute_routing_decision([], sinks, tenant_policy=None)
+        assert decision["policy"] == "default"
+        assert decision["sink_counts"] == {"relational": 2, "vector": 1}
+
+    def test_named_tenant_policy(self):
+        sinks = [frozenset({"vector"})]
+        decision = _compute_routing_decision([], sinks, tenant_policy={"default_sinks": ["vector"], "rules": []})
+        assert decision["policy"] == "tenant"
+        assert decision["sink_counts"] == {"vector": 1}
+
+    def test_empty_sinks_contribute_no_counts(self):
+        # A chunk dropped by policy (empty sinks) must not inflate any sink count.
+        sinks = [frozenset(), frozenset({"relational"}), frozenset()]
+        decision = _compute_routing_decision([], sinks, tenant_policy=None)
+        assert decision["sink_counts"] == {"relational": 1}
+
+    def test_all_chunks_dropped_yields_empty_counts(self):
+        sinks = [frozenset(), frozenset()]
+        decision = _compute_routing_decision([], sinks, tenant_policy=None)
+        assert decision["sink_counts"] == {}
+        assert decision["policy"] == "default"
+
+    def test_no_chunks_yields_empty_counts(self):
+        decision = _compute_routing_decision([], [], tenant_policy=None)
+        assert decision == {"policy": "default", "sink_counts": {}}
+
+    def test_empty_dict_tenant_policy_is_still_named_tenant(self):
+        # An empty-but-present dict ({}) is still "tenant" — only None means default.
+        decision = _compute_routing_decision([], [frozenset({"relational"})], tenant_policy={})
+        assert decision["policy"] == "tenant"

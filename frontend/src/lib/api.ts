@@ -18,6 +18,34 @@ import {
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** Request timeout in ms — overridable via NEXT_PUBLIC_API_TIMEOUT_MS (default 30s). */
+const REQUEST_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.NEXT_PUBLIC_API_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+})();
+
+/** fetch() wrapper that aborts after REQUEST_TIMEOUT_MS and surfaces a clear timeout error. */
+async function fetchWithTimeout(
+  input: string,
+  init?: RequestInit
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new APIError(
+        0,
+        `Request timed out after ${REQUEST_TIMEOUT_MS}ms`
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Build the auth header using priority: sessionStorage JWT > env API key > none */
 function buildAuthHeader(): Record<string, string> {
   const jwt = getStoredJWT();
@@ -45,9 +73,20 @@ interface TokenResponse {
   expires_in: number;
 }
 
+/** Runtime guard for the token-exchange payload — the API contract is untrusted at the boundary. */
+function isTokenResponse(value: unknown): value is TokenResponse {
+  return (
+    value != null &&
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>).access_token === "string" &&
+    typeof (value as Record<string, unknown>).token_type === "string" &&
+    typeof (value as Record<string, unknown>).expires_in === "number"
+  );
+}
+
 /** Exchange an API key for a JWT. Does NOT modify stored auth state. */
 async function fetchToken(apiKey: string): Promise<TokenResponse> {
-  const res = await fetch(`${API_BASE}/v1/auth/token`, {
+  const res = await fetchWithTimeout(`${API_BASE}/v1/auth/token`, {
     method: "POST",
     cache: "no-store",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -85,11 +124,17 @@ async function fetchToken(apiKey: string): Promise<TokenResponse> {
         env.error?.code
       );
     }
+    if (!isTokenResponse(env.data)) {
+      throw new APIError(res.status, "Malformed token response from server");
+    }
     return env.data;
   }
 
   // Direct (non-enveloped) response from the token endpoint
-  return body as TokenResponse;
+  if (!isTokenResponse(body)) {
+    throw new APIError(res.status, "Malformed token response from server");
+  }
+  return body;
 }
 
 /** Silent JWT refresh is disabled — raw API key is never persisted in the browser.
@@ -100,7 +145,7 @@ async function tryRefreshJWT(): Promise<boolean> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const doRequest = async (): Promise<Response> => {
-    return fetch(`${API_BASE}${path}`, {
+    return fetchWithTimeout(`${API_BASE}${path}`, {
       ...init,
       cache: "no-store",
       headers: {

@@ -67,9 +67,12 @@ export default function DocumentDetailPage({
   }, [id]);
 
   useEffect(() => {
-    // setState happens only after an await — safe; rule can't see across functions
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
+    // load() only calls setState after an await, so it never sets state
+    // synchronously within the effect body. The async wrapper makes that
+    // explicit to the linter, avoiding a false set-state-in-effect report.
+    void (async () => {
+      await load();
+    })();
   }, [load]);
 
   // Poll while the doc is mid-flight
@@ -209,16 +212,16 @@ export default function DocumentDetailPage({
                   Key points
                 </p>
                 <ul className="list-disc list-inside space-y-1">
-                  {doc.summary.key_points.map((kp, i) => (
-                    <li key={i}>{kp}</li>
+                  {doc.summary.key_points.map((kp) => (
+                    <li key={kp}>{kp}</li>
                   ))}
                 </ul>
               </div>
             )}
             {doc.summary.topics && doc.summary.topics.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {doc.summary.topics.map((t, i) => (
-                  <Badge key={i} variant="secondary">
+                {doc.summary.topics.map((t) => (
+                  <Badge key={t} variant="secondary">
                     {t}
                   </Badge>
                 ))}
@@ -253,8 +256,12 @@ export default function DocumentDetailPage({
                       {label}
                     </p>
                     <div className="flex flex-wrap gap-1.5">
-                      {group.map((e, i) => (
-                        <Badge key={i} variant="outline" className="font-normal">
+                      {group.map((e) => (
+                        <Badge
+                          key={`${label}:${e.normalized ?? e.value}`}
+                          variant="outline"
+                          className="font-normal"
+                        >
                           {e.value}
                         </Badge>
                       ))}

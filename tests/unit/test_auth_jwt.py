@@ -89,3 +89,39 @@ class TestDecodeToken:
         with patch("omnivore.auth.jwt.get_settings", return_value=_mock_settings(public="")):
             with pytest.raises(InvalidCredentialsError):
                 decode_token(token)
+
+    def _craft(self, *, iss=...):
+        """Mint a token directly via PyJWT so the iss claim can be controlled."""
+        from datetime import UTC, datetime, timedelta
+
+        import jwt as pyjwt
+
+        now = datetime.now(UTC)
+        payload = {
+            "sub": _PRINCIPAL,
+            "tenant_id": str(_TENANT),
+            "scopes": _SCOPES,
+            "iat": now,
+            "exp": now + timedelta(seconds=3600),
+        }
+        if iss is not ...:
+            payload["iss"] = iss
+        return pyjwt.encode(payload, _PRIV, algorithm="RS256")
+
+    def test_wrong_issuer_raises(self):
+        token = self._craft(iss="someone-else")
+        with patch("omnivore.auth.jwt.get_settings", return_value=_mock_settings()):
+            with pytest.raises(InvalidCredentialsError):
+                decode_token(token)
+
+    def test_missing_issuer_raises(self):
+        token = self._craft()  # no iss claim at all
+        with patch("omnivore.auth.jwt.get_settings", return_value=_mock_settings()):
+            with pytest.raises(InvalidCredentialsError):
+                decode_token(token)
+
+    def test_correct_issuer_accepted(self):
+        token = self._craft(iss="omnivore")
+        with patch("omnivore.auth.jwt.get_settings", return_value=_mock_settings()):
+            payload = decode_token(token)
+        assert payload["iss"] == "omnivore"

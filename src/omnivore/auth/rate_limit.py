@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 
@@ -7,9 +8,17 @@ import redis.asyncio as aioredis
 
 from omnivore.config import get_settings
 
+# Bounded connection pool for the fallback client, mirroring the app's main
+# Redis usage. Prevents the lazily-created fallback from opening an unbounded
+# number of connections under load.
+_FALLBACK_MAX_CONNECTIONS = 10
+
 # Singleton — set by api/main.py lifespan and worker on_startup.
-# Falls back to a fresh connection when None (e.g. in unit tests).
+# Falls back to a single bounded client when None (e.g. in unit tests / worker
+# paths that don't wire the lifespan). Cached so it isn't recreated per call.
 _redis_client: aioredis.Redis | None = None
+_fallback_client: aioredis.Redis | None = None
+_fallback_loop: object = None      # event loop the fallback client was created on
 _lua_script_obj: object = None     # redis Script — registered once, reused across calls
 _lua_script_client: object = None  # the client the script was registered on; invalidates cache on change
 
@@ -17,7 +26,32 @@ _lua_script_client: object = None  # the client the script was registered on; in
 def _get_redis() -> aioredis.Redis:
     if _redis_client is not None:
         return _redis_client
-    return aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
+    global _fallback_client, _fallback_loop
+    # An async Redis client is bound to the event loop it was created on. Cache it
+    # per running loop: a stable production loop reuses one client, while tests that
+    # spin a fresh loop per asyncio.run() get a fresh client instead of one bound to
+    # a closed loop ("Event loop is closed" / "Future attached to a different loop").
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _fallback_client is None or _fallback_loop is not loop:
+        _fallback_client = aioredis.from_url(
+            get_settings().REDIS_URL,
+            decode_responses=True,
+            max_connections=_FALLBACK_MAX_CONNECTIONS,
+        )
+        _fallback_loop = loop
+    return _fallback_client
+
+
+async def close_fallback_redis() -> None:
+    """Close the lazily-created fallback client, if any. Safe to call repeatedly."""
+    global _fallback_client, _fallback_loop
+    if _fallback_client is not None:
+        await _fallback_client.aclose()
+        _fallback_client = None
+        _fallback_loop = None
 
 
 def _get_script(r: aioredis.Redis) -> object:

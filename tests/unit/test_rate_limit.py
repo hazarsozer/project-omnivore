@@ -4,7 +4,14 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from omnivore.auth.rate_limit import RateLimitResult, check_rate_limit
+import omnivore.auth.rate_limit as rl_module
+from omnivore.auth.rate_limit import (
+    _FALLBACK_MAX_CONNECTIONS,
+    RateLimitResult,
+    _get_redis,
+    check_rate_limit,
+    close_fallback_redis,
+)
 
 _TENANT = uuid.uuid4()
 
@@ -81,3 +88,55 @@ class TestCheckRateLimit:
         ):
             result = await check_rate_limit(_TENANT, capacity=200)
         assert result.capacity == 200
+
+
+class TestFallbackClient:
+    def setup_method(self):
+        rl_module._fallback_client = None
+
+    def teardown_method(self):
+        rl_module._fallback_client = None
+
+    def test_fallback_is_bounded_and_cached(self):
+        """When no singleton is wired, _get_redis builds one bounded client and reuses it."""
+        fake = MagicMock()
+        with (
+            patch("omnivore.auth.rate_limit._redis_client", None),
+            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=fake) as from_url,
+        ):
+            first = _get_redis()
+            second = _get_redis()
+
+        assert first is fake
+        assert second is fake          # reused, not recreated
+        from_url.assert_called_once()  # created exactly once
+        kwargs = from_url.call_args.kwargs
+        assert kwargs["max_connections"] == _FALLBACK_MAX_CONNECTIONS
+        assert kwargs["decode_responses"] is True
+
+    def test_singleton_takes_priority_over_fallback(self):
+        """An explicitly wired _redis_client is returned without building a fallback."""
+        singleton = MagicMock()
+        with (
+            patch("omnivore.auth.rate_limit._redis_client", singleton),
+            patch("omnivore.auth.rate_limit.aioredis.from_url") as from_url,
+        ):
+            assert _get_redis() is singleton
+        from_url.assert_not_called()
+
+    async def test_close_fallback_redis_closes_and_resets(self):
+        fake = AsyncMock()
+        with (
+            patch("omnivore.auth.rate_limit._redis_client", None),
+            patch("omnivore.auth.rate_limit.aioredis.from_url", return_value=fake),
+        ):
+            _get_redis()
+            await close_fallback_redis()
+
+        fake.aclose.assert_awaited_once()
+        assert rl_module._fallback_client is None
+
+    async def test_close_fallback_redis_noop_when_unset(self):
+        # Should not raise when no fallback was ever created.
+        await close_fallback_redis()
+        assert rl_module._fallback_client is None

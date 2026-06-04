@@ -22,6 +22,30 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
 _RRF_K = 60
 
+# HNSW returns its top `ef_search` candidates *before* the tenant_id / sinks
+# filters are applied (a "recheck"). With pgvector's default ef_search (40),
+# a tenant holding a small slice of a large multi-tenant index can get back
+# fewer than top_k rows — or zero — even when matches exist. Scaling ef_search
+# to the requested top_k widens the candidate pool so enough survive the filter.
+_EF_SEARCH_MULTIPLIER = 8
+_EF_SEARCH_MIN = 40
+_EF_SEARCH_MAX = 1000
+
+
+def _ef_search_for(top_k: int) -> int:
+    return min(_EF_SEARCH_MAX, max(_EF_SEARCH_MIN, top_k * _EF_SEARCH_MULTIPLIER))
+
+
+async def _set_ef_search(db: Any, top_k: int) -> None:
+    """Widen the HNSW candidate pool for the current transaction's vector query.
+
+    tenant_session() runs every statement in one autobegun transaction (the read
+    path never commits) and rolls back on close, so this session-level SET applies
+    to the following vector query and is discarded on checkout return — no pool
+    leakage. ef_search is an integer GUC; the value is computed, never user text.
+    """
+    await db.execute(text(f"SET hnsw.ef_search = {_ef_search_for(top_k)}"))
+
 
 class SearchRequest(BaseModel):
     query: str
@@ -105,6 +129,7 @@ async def _bm25_search(
 async def _vector_search(
     db: Any, vector: list[float], tenant_id: uuid.UUID, top_k: int
 ) -> list[dict]:
+    await _set_ef_search(db, top_k)
     vec_str = "[" + ",".join(str(x) for x in vector) + "]"
     sql = text("""
         SELECT
@@ -129,6 +154,9 @@ async def _hybrid_search(
     db: Any, query: str, vector: list[float], tenant_id: uuid.UUID, top_k: int
 ) -> list[dict]:
     pre_k = min(top_k * 4, 200)
+    # The vec CTE pulls pre_k candidates from HNSW before the tenant/sinks filter;
+    # size ef_search to pre_k (not top_k) so the recheck has matching headroom.
+    await _set_ef_search(db, pre_k)
     vec_str = "[" + ",".join(str(x) for x in vector) + "]"
     sql = text("""
         WITH bm25 AS (

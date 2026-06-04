@@ -29,6 +29,10 @@ logger = structlog.get_logger(__name__)
 
 _ALLOWED_STATUSES = {"queued", "routing", "extracting", "enriching", "indexed", "failed", "duplicate"}
 _STREAM_CHUNK = 1 << 20  # 1 MB read chunks
+# Bytes fed to libmagic for MIME sniffing. 2 KB comfortably covers every
+# format's magic header / signature region (PDF %PDF-, ZIP/OOXML PK\x03\x04,
+# HTML <!doctype, etc.) without buffering the whole upload in RAM.
+_MIME_SNIFF_BYTES = 2048
 
 
 @router.post("", status_code=202)
@@ -52,7 +56,7 @@ async def upload_document(
             ).model_dump(),
         )
 
-    # Stream file in chunks: compute sha256 incrementally, sniff MIME from first 2 KB
+    # Stream file in chunks: compute sha256 incrementally, sniff MIME from the header
     hasher = hashlib.sha256()
     mime_header = b""
     total = 0
@@ -65,8 +69,8 @@ async def upload_document(
         if total > settings.MAX_UPLOAD_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
         hasher.update(chunk)
-        if len(mime_header) < 2048:
-            mime_header += chunk[: 2048 - len(mime_header)]
+        if len(mime_header) < _MIME_SNIFF_BYTES:
+            mime_header += chunk[: _MIME_SNIFF_BYTES - len(mime_header)]
 
     sha256_digest = hasher.digest()
     detected_mime = magic.from_buffer(mime_header, mime=True)
@@ -254,7 +258,10 @@ async def get_document_entities(
     )
 
 
-@router.get("")
+# response_model=None: handler may return either the APIResponse envelope (200)
+# or a JSONResponse (422 on an invalid cursor); FastAPI can't infer a model from
+# the union, so we opt out of automatic response-model generation.
+@router.get("", response_model=None)
 async def list_documents(
     db: Annotated[AsyncSession, Depends(get_db_for_tenant)],
     auth: Annotated[AuthContext, Depends(require_scope("documents:read"))],
@@ -262,16 +269,29 @@ async def list_documents(
     status: str | None = Query(None),
     limit: int = Query(50, le=200),
     cursor: str | None = Query(None),
-) -> APIResponse[list]:
+) -> APIResponse[list] | JSONResponse:
     tenant_id = auth.tenant_id
     stmt = select(Document).where(Document.tenant_id == tenant_id).order_by(Document.created_at.desc()).limit(limit)
     if status and status in _ALLOWED_STATUSES:
         stmt = stmt.where(Document.status == status)
     if cursor:
+        # The cursor is the ISO-8601 created_at of the last item on the previous
+        # page. Validate strictly: a malformed cursor must surface as a 422 rather
+        # than being silently dropped (which would return an unrelated first page).
         try:
-            stmt = stmt.where(Document.created_at < datetime.fromisoformat(cursor))
+            cursor_dt = datetime.fromisoformat(cursor)
         except ValueError:
-            pass
+            return JSONResponse(
+                status_code=422,
+                content=APIResponse(
+                    success=False,
+                    error={
+                        "code": "INVALID_CURSOR",
+                        "message": "cursor must be an ISO-8601 datetime (e.g. 2026-01-01T00:00:00+00:00)",
+                    },
+                ).model_dump(),
+            )
+        stmt = stmt.where(Document.created_at < cursor_dt)
 
     docs = (await db.scalars(stmt)).all()
     return APIResponse(

@@ -8,6 +8,11 @@ import jwt as pyjwt
 from omnivore.auth.errors import InvalidCredentialsError
 from omnivore.config import get_settings
 
+# Single source of truth for the JWT issuer claim. issue_token() sets it and
+# decode_token() enforces it so tokens minted by another Omnivore instance are
+# rejected — keep both sides reading this constant so they can't drift.
+_ISSUER = "omnivore"
+
 
 def issue_token(
     *,
@@ -22,7 +27,7 @@ def issue_token(
 
     now = datetime.now(UTC)
     payload = {
-        "iss": "omnivore",
+        "iss": _ISSUER,
         "sub": principal_id,
         "tenant_id": str(tenant_id),
         "scopes": scopes,
@@ -44,7 +49,8 @@ def decode_token(token: str) -> dict:
             token,
             public_key,
             algorithms=[settings.JWT_ALGORITHM],
-            options={"require": ["exp", "iat", "sub", "tenant_id", "scopes"]},
+            issuer=_ISSUER,
+            options={"require": ["exp", "iat", "iss", "sub", "tenant_id", "scopes"]},
         )
     except pyjwt.PyJWTError:
         raise InvalidCredentialsError()

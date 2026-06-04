@@ -318,3 +318,61 @@ async def test_hybrid_search_sql_contains_both_sinks_filters():
     sql = _get_sql_string(db)
     assert "'relational' = ANY(c.sinks)" in sql, f"Missing relational sinks filter in hybrid SQL: {sql}"
     assert "'vector' = ANY(sinks)" in sql, f"Missing vector sinks filter in hybrid SQL: {sql}"
+
+
+# ---------------------------------------------------------------------------
+# HNSW ef_search — widen candidate pool so the post-filter recheck returns
+# enough rows for tenants holding a small slice of a large vector index.
+# ---------------------------------------------------------------------------
+
+from omnivore.api.routes.search import (  # noqa: E402
+    _EF_SEARCH_MAX,
+    _EF_SEARCH_MIN,
+    _ef_search_for,
+)
+
+
+def _all_executed_sql(db: AsyncMock) -> list[str]:
+    return [str(c.args[0]) for c in db.execute.call_args_list]
+
+
+def test_ef_search_for_clamps_to_min_and_max():
+    assert _ef_search_for(1) == _EF_SEARCH_MIN          # tiny top_k floored
+    assert _ef_search_for(20) == 160                    # 20 * 8
+    assert _ef_search_for(10_000) == _EF_SEARCH_MAX     # huge top_k capped
+
+
+async def test_vector_search_sets_ef_search_before_query():
+    """_vector_search issues SET hnsw.ef_search ahead of the SELECT."""
+    db = _make_db([])
+
+    await _vector_search(db, _VEC, _TEST_TENANT_ID, 20)
+
+    executed = _all_executed_sql(db)
+    assert any("SET hnsw.ef_search" in s for s in executed), f"No ef_search SET issued: {executed}"
+    # SET must precede the SELECT so it applies to the vector query.
+    set_idx = next(i for i, s in enumerate(executed) if "SET hnsw.ef_search" in s)
+    select_idx = next(i for i, s in enumerate(executed) if "embedding <=>" in s)
+    assert set_idx < select_idx
+    assert f"SET hnsw.ef_search = {_ef_search_for(20)}" in executed[set_idx]
+
+
+async def test_hybrid_search_sets_ef_search_scaled_to_pre_k():
+    """_hybrid_search sizes ef_search to pre_k (top_k*4) for the vec CTE headroom."""
+    db = _make_db([])
+
+    await _hybrid_search(db, "query", _VEC, _TEST_TENANT_ID, 20)
+
+    executed = _all_executed_sql(db)
+    pre_k = min(20 * 4, 200)
+    assert any(f"SET hnsw.ef_search = {_ef_search_for(pre_k)}" in s for s in executed), executed
+
+
+async def test_bm25_search_does_not_set_ef_search():
+    """BM25 is text-only; it must not touch the vector GUC."""
+    db = _make_db([])
+
+    await _bm25_search(db, "query", _TEST_TENANT_ID, 20)
+
+    executed = _all_executed_sql(db)
+    assert not any("hnsw.ef_search" in s for s in executed), executed

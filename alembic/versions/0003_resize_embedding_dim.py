@@ -3,9 +3,28 @@
 Revision ID: 0003
 Revises: 0002
 Create Date: 2026-05-05
+
+Data-loss Warning
+-----------------
+This migration is DESTRUCTIVE IN BOTH DIRECTIONS. pgvector has no in-place cast
+to change a vector column's dimensionality, so both upgrade() and downgrade()
+DROP the ``core.chunks.embedding`` column (and its HNSW index) and re-ADD it at
+the new dimension. Every stored embedding is lost in either direction.
+
+  - upgrade()   : vector(1536) -> vector(768)  (drops all 1536-dim embeddings)
+  - downgrade() : vector(768)  -> vector(1536) (drops all 768-dim embeddings)
+
+Do NOT run this against a populated production database without a re-embed plan:
+after running, re-embed every chunk (re-ingest, or backfill embeddings for all
+rows where ``embedding IS NULL``) — search returns nothing for un-embedded rows.
+
+As a guardrail, upgrade() refuses to run if any non-NULL embeddings exist; clear
+them deliberately (``UPDATE core.chunks SET embedding = NULL``) first if intended.
+downgrade() has no such guard and will drop data silently.
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0003"

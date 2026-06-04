@@ -36,6 +36,10 @@ from omnivore.pipeline.registry import registry
 
 logger = structlog.get_logger(__name__)
 
+# Module-private helpers (leading-underscore convention): middleware classes,
+# Prometheus label resolution, JWT-key validation, and the queue-depth poller.
+# They are internal to app wiring and are not part of any public import surface.
+
 
 class _RequestContextMiddleware(BaseHTTPMiddleware):
     """Bind a unique request_id to every structlog log line for this request."""
@@ -68,6 +72,11 @@ class _PrometheusMiddleware(BaseHTTPMiddleware):
 
 
 def _route_template(request: Request) -> str:
+    """Resolve the request to its parameterised route path (e.g. ``/v1/documents/{document_id}``).
+
+    Used as a Prometheus label so per-path metrics don't explode into one series
+    per concrete id. Returns ``"__unmatched__"`` when no route matches.
+    """
     for route in request.app.routes:
         match, _ = route.matches(request.scope)
         if match == Match.FULL:

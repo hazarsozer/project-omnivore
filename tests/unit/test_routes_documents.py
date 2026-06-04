@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import io
+import json
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from omnivore.api.routes.documents import (
     delete_document,
@@ -413,6 +415,22 @@ async def test_list_documents_with_cursor():
     resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor="2026-01-01T00:00:00+00:00")
 
     assert resp.success is True
+
+
+async def test_list_documents_invalid_cursor_returns_422():
+    """A malformed cursor must surface as 422 in the APIResponse envelope, not
+    silently fall through to an unrelated first page."""
+    db = _make_db(scalars_return=[_make_doc()])
+
+    resp = await list_documents(db=db, auth=_make_auth(), status=None, limit=50, cursor="not-a-datetime")
+
+    assert isinstance(resp, JSONResponse)
+    assert resp.status_code == 422
+    body = json.loads(resp.body)
+    assert body["success"] is False
+    assert body["error"]["code"] == "INVALID_CURSOR"
+    # Must not have executed the query with a bogus cursor.
+    db.scalars.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

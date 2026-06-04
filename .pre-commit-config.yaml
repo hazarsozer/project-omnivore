@@ -17,3 +17,15 @@ repos:
         pass_filenames: false
         types: [python]
         stages: [pre-commit]
+
+      # SCA: dependency vulnerability scan. Manual-stage only — it hits the OSV/PyPI
+      # advisory API, so it would add latency and break offline commits if it ran on
+      # every commit. Run on demand: `uv run pre-commit run pip-audit --hook-stage manual`.
+      # CI runs the same scan on every push/PR (see .github/workflows/ci.yml).
+      - id: pip-audit
+        name: pip-audit (dependency vulnerability scan)
+        entry: uv run pip-audit --progress-spinner off
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]

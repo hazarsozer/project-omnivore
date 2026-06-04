@@ -1,3 +1,21 @@
+"""SQLAlchemy 2.0 models for the ``core`` schema.
+
+Data retention
+--------------
+Omnivore does **not** auto-expire or delete any data. The tables holding user
+document content — ``documents``, ``chunks``, ``entities``, ``extracted_tables``,
+and ``extracted_rows`` — accumulate indefinitely until something removes them.
+Retention is the **operator's responsibility**:
+
+* Per-document deletion is exposed at ``DELETE /v1/documents/{id}``
+  (see :func:`omnivore.api.routes.documents.delete_document`), which removes the
+  object-store blob and cascades to chunks, entities, extracted tables/rows, and
+  jobs via FK ``ON DELETE CASCADE``.
+* Bulk / time-based retention (e.g. "purge documents older than N days") is not
+  implemented in-app by design. Operators who need it should run a scheduled job
+  against ``documents.created_at`` or configure storage/DB-level lifecycle rules.
+  No destructive retention logic ships enabled by default.
+"""
 from __future__ import annotations
 
 import uuid
