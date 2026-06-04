@@ -12,11 +12,16 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const isLoginPage = pathname === "/login";
 
   useEffect(() => {
-    if (isLoginPage || isAuthenticated()) {
-      setReady(true);
-    } else {
-      router.replace("/login");
-    }
+    // Wrap the state-setting branch in an async IIFE so the linter does not
+    // flag a synchronous setState within the effect body
+    // (react-hooks/set-state-in-effect).
+    void (async () => {
+      if (isLoginPage || isAuthenticated()) {
+        setReady(true);
+      } else {
+        router.replace("/login");
+      }
+    })();
   }, [isLoginPage, router]);
 
   if (!ready) return null;

@@ -179,7 +179,9 @@ def main() -> int:
         up = upload(client, key, Path("o"), content=b"x" * (limit + 1), filename="big.txt")
         record("edge", "oversize-413", up.status_code == 413, f"status={up.status_code}")
     else:
-        record("edge", "oversize-413", None, f"MAX_UPLOAD_SIZE_BYTES={limit} too large to test cheaply")
+        record("edge", "oversize-413", None,
+               f"MAX_UPLOAD_SIZE_BYTES={limit} too large to trigger here; the 413/429 "
+               "limit paths are covered deterministically in tests/unit + tests/chaos")
 
     # ---- summary ----
     print("\n" + "=" * 60)

@@ -12,7 +12,6 @@ import type {
 import {
   clearAuth,
   getStoredJWT,
-  setStoredJWT,
 } from "./auth";
 
 export const API_BASE =
